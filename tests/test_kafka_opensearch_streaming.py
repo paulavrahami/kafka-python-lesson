@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import threading
 import time
+import traceback
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -14,6 +15,14 @@ PATH = Path(__file__).resolve().parents[1] / "scripts/kafka_opensearch_streaming
 SPEC = importlib.util.spec_from_file_location("lesson_opensearch_streaming", PATH)
 pipeline = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pipeline)
+
+
+def cloud_config():
+    """Intentionally fake credentials; no network is used by these tests."""
+    return {"bootstrap.servers": "pkc-example.eu-central-1.aws.confluent.cloud:9092",
+            "security.protocol": "SASL_SSL", "sasl.mechanisms": "PLAIN",
+            "sasl.username": "lesson-key-123", "sasl.password": "lesson/secret+value=456",
+            "client.id": "cloud-lesson-test"}
 
 
 def event(identity="one", *, title="עריכה לדוגמה"):
@@ -57,7 +66,8 @@ class Services:
             def poll(self, timeout):
                 while owner.pending:
                     callback, message = owner.pending.pop(0)
-                    callback("delivery failure" if owner.delivery_error else None, message)
+                    problem = "delivery failure" if owner.delivery_error is True else (owner.delivery_error or None)
+                    callback(problem, message)
                 if timeout:
                     time.sleep(min(0.001, timeout))
 
@@ -103,7 +113,10 @@ class Services:
                 self.closed = True
 
         self.kafka_module = types.SimpleNamespace(Producer=Producer, Consumer=Consumer,
-                                                  KafkaError=types.SimpleNamespace(_PARTITION_EOF=-191),
+                                                  KafkaError=types.SimpleNamespace(
+                                                      _PARTITION_EOF=-191, TOPIC_AUTHORIZATION_FAILED=29,
+                                                      UNKNOWN_TOPIC_OR_PART=3, LEADER_NOT_AVAILABLE=5,
+                                                      TOPIC_ALREADY_EXISTS=36),
                                                   KafkaException=RuntimeError)
 
     def add_raw(self, payload, headers=()):
@@ -124,6 +137,15 @@ class Services:
 
         class SearchClient:
             closed = False
+
+            def __init__(self):
+                self.indices = Mock()
+                self.indices.exists.return_value = True
+                self.indices.get_mapping.side_effect = lambda *, index, **kwargs: {
+                    index: {"mappings": {"properties": pipeline.INDEX_PROPERTIES}}}
+
+            def info(self, **kwargs):
+                return {"version": {"number": "test"}}
 
             def index(self, *, index, id, body, request_timeout):
                 owner.index_attempts += 1
@@ -151,6 +173,57 @@ class Services:
         with patch.dict("sys.modules", {"confluent_kafka": self.kafka_module}):
             with patch.object(pipeline, "create_opensearch_client", side_effect=self.search_factory):
                 return pipeline.run_opensearch_pipeline(source, **options)
+
+
+class TopicError:
+    def __init__(self, code, text):
+        self.number, self.text = code, text
+
+    def code(self):
+        return self.number
+
+    def __str__(self):
+        return self.text
+
+
+class TopicAdmin:
+    """Fake requiring topic-scoped metadata; cluster-wide listing is impossible."""
+    def __init__(self, *, missing=False, topic_error=None, metadata_failure=None, forbid_create=True):
+        self.missing, self.topic_error = missing, topic_error
+        self.metadata_failure, self.forbid_create = metadata_failure, forbid_create
+        self.clients, self.metadata_requests, self.created = [], [], []
+        owner = self
+
+        class AdminClient:
+            def __init__(self, config):
+                self.config = config
+                owner.clients.append(self)
+
+            def list_topics(self, *, topic, timeout):
+                owner.metadata_requests.append({"topic": topic, "timeout": timeout})
+                if owner.metadata_failure is not None:
+                    raise owner.metadata_failure
+                partitions = {number: types.SimpleNamespace(error=None, leader=0, isrs=[0], replicas=[0, 1, 2])
+                              for number in range(3)}
+                info = types.SimpleNamespace(error=owner.topic_error, partitions=partitions)
+                return types.SimpleNamespace(brokers={0: object()}, topics={} if owner.missing else {topic: info})
+
+            def create_topics(self, topics, **kwargs):
+                owner.created.extend(topics)
+                if owner.forbid_create:
+                    raise AssertionError("A pre-created Cloud topic must not require CREATE access")
+                owner.missing, owner.topic_error = False, None
+                return {entry.topic: Mock() for entry in topics}
+
+        def new_topic(topic, *, num_partitions, replication_factor):
+            return types.SimpleNamespace(topic=topic, num_partitions=num_partitions,
+                                         replication_factor=replication_factor)
+
+        self.module = types.SimpleNamespace(AdminClient=AdminClient, NewTopic=new_topic)
+
+    def installed(self, services):
+        return patch.dict("sys.modules", {"confluent_kafka": services.kafka_module,
+                                          "confluent_kafka.admin": self.module})
 
 
 class PipelineTests(unittest.TestCase):
@@ -403,6 +476,176 @@ class PreparationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     pipeline.create_opensearch_client(url)
                 constructor.assert_not_called()
+
+
+class CloudConnectionTests(unittest.TestCase):
+    def assert_cloud_client(self, actual, supplied):
+        self.assertEqual(actual["bootstrap.servers"], supplied["bootstrap.servers"])
+        self.assertEqual(actual["security.protocol"], "SASL_SSL")
+        self.assertEqual(actual["sasl.mechanism"], "PLAIN")
+        self.assertEqual(actual["sasl.username"], supplied["sasl.username"])
+        self.assertEqual(actual["sasl.password"], supplied["sasl.password"])
+        self.assertTrue(actual["enable.ssl.certificate.verification"])
+        self.assertEqual(actual["ssl.endpoint.identification.algorithm"], "https")
+        self.assertEqual(actual["broker.address.family"], "any")
+        self.assertGreaterEqual(actual["socket.connection.setup.timeout.ms"], 10000)
+        self.assertGreater(actual["api.version.request.timeout.ms"], 10000)
+        self.assertFalse(actual["allow.auto.create.topics"])
+        self.assertEqual(actual["log_level"], 0)
+
+    def assert_no_credentials(self, value, config):
+        text = str(value)
+        for field in ("sasl.username", "sasl.password"):
+            self.assertNotIn(config[field], text)
+
+    def test_cloud_preflight_and_runtime_share_secure_authoritative_connection(self):
+        services, admin, config = Services(), TopicAdmin(), cloud_config()
+        snapshots = []
+        with admin.installed(services):
+            report = services.run([event()], kafka_config=config, create_topic=False,
+                                  replication_factor=3, preflight=True, on_progress=snapshots.append)
+        self.assertEqual(len(admin.clients), 1)
+        for client in (admin.clients[0], services.producers[0], services.consumers[0]):
+            self.assert_cloud_client(client.config, config)
+        self.assertEqual(admin.created, [])
+        self.assertEqual([request["topic"] for request in admin.metadata_requests], ["persistent.test"])
+        self.assertGreaterEqual(admin.metadata_requests[0]["timeout"], 15)
+        self.assertEqual((report["confirmed"], report["indexed"], report["committed"]), (1, 1, 1))
+        self.assertLess(services.trace.index(("indexed", "one")), services.trace.index(("commit", "one")))
+        self.assertTrue(services.producers[0].config["enable.idempotence"])
+        self.assertEqual(services.producers[0].config["acks"], "all")
+        self.assertFalse(services.consumers[0].config["enable.auto.commit"])
+        self.assertFalse(services.consumers[0].config["enable.auto.offset.store"])
+        self.assertEqual(services.consumers[0].config["group.id"], "stable-group")
+        self.assertEqual(services.producers[0].config["queue.buffering.max.kbytes"], 1024)
+        self.assertEqual(services.consumers[0].config["queued.max.messages.kbytes"], 1024)
+        self.assert_no_credentials((report, snapshots), config)
+        self.assertNotIn("enable.ssl.certificate.verification", config)  # Input was not mutated.
+
+    def test_cloud_without_preflight_still_configures_both_role_clients(self):
+        services, admin, config = Services(), TopicAdmin(), cloud_config()
+        with admin.installed(services):
+            report = services.run([event()], kafka_config=config, preflight=False,
+                                  create_topic=False, replication_factor=3,
+                                  bootstrap_servers="127.0.0.1:9092")
+        self.assertEqual(admin.clients, [])
+        for client in (services.producers[0], services.consumers[0]):
+            self.assert_cloud_client(client.config, config)
+        self.assertTrue(report["current_run_committed"])
+
+    def test_local_defaults_and_missing_topic_creation_remain_supported(self):
+        services, admin = Services(), TopicAdmin(missing=True, forbid_create=False)
+        with admin.installed(services):
+            report = services.run([event()], preflight=True)
+        self.assertTrue(report["current_run_committed"])
+        self.assertEqual(len(admin.created), 1)
+        self.assertEqual(admin.created[0].replication_factor, 1)
+        for client in (admin.clients[0], services.producers[0], services.consumers[0]):
+            self.assertEqual(client.config["bootstrap.servers"], "127.0.0.1:9092")
+            self.assertEqual(client.config["broker.address.family"], "v4")
+            self.assertEqual(client.config["socket.connection.setup.timeout.ms"], 5000)
+            self.assertNotIn("sasl.password", client.config)
+
+    def test_explicit_cloud_topic_creation_uses_requested_replication_factor(self):
+        services, admin = Services(), TopicAdmin(missing=True, forbid_create=False)
+        with admin.installed(services):
+            report = services.run([event()], kafka_config=cloud_config(), preflight=True,
+                                  create_topic=True, replication_factor=3)
+        self.assertTrue(report["current_run_committed"])
+        self.assertEqual(len(admin.created), 1)
+        self.assertEqual((admin.created[0].num_partitions, admin.created[0].replication_factor), (3, 3))
+
+    def test_precreated_missing_or_inaccessible_topic_never_requests_creation(self):
+        cases = ((None, "missing or not visible"),
+                 (TopicError(3, "unknown"), "missing or not visible"),
+                 (TopicError(29, "denied"), "DESCRIBE"))
+        for problem, expected in cases:
+            with self.subTest(problem=str(problem)):
+                services = Services()
+                admin = TopicAdmin(missing=problem is None, topic_error=problem)
+                with admin.installed(services):
+                    with self.assertRaisesRegex(pipeline.OpenSearchPipelineError, expected) as raised:
+                        services.run([event()], kafka_config=cloud_config(), preflight=True,
+                                     create_topic=False, replication_factor=3)
+                self.assertEqual(raised.exception.stage, "preflight")
+                self.assertEqual(admin.created, [])
+                self.assertEqual(services.producers, [])
+                self.assertEqual([request["topic"] for request in admin.metadata_requests], ["persistent.test"])
+
+    def test_connection_mapping_cannot_override_processing_guarantees(self):
+        for name, value in (("group.id", "another-group"), ("enable.auto.commit", True),
+                            ("enable.idempotence", False), ("acks", "0"), ("debug", "security")):
+            with self.subTest(name=name):
+                services, config = Services(), {**cloud_config(), name: value}
+                with self.assertRaises(ValueError):
+                    services.run([event()], kafka_config=config)
+                self.assertEqual(services.producers, [])
+                self.assertEqual(services.search_clients, [])
+
+    def test_incomplete_cloud_config_does_not_fall_back_to_localhost(self):
+        services, config = Services(), cloud_config()
+        del config["bootstrap.servers"]
+        with self.assertRaises(ValueError):
+            services.run([event()], kafka_config=config)
+        self.assertEqual(services.producers, [])
+
+    def test_invalid_topic_policy_is_rejected_before_services(self):
+        for options in ({"create_topic": "false"}, {"replication_factor": 0}, {"replication_factor": True}):
+            with self.subTest(options=options):
+                services = Services()
+                with self.assertRaises(ValueError):
+                    services.run([event()], **options)
+                self.assertEqual(services.producers, [])
+
+    def test_cloud_constructor_exception_does_not_leak_credentials_or_traceback_cause(self):
+        config, services = cloud_config(), Services()
+        failure = RuntimeError("Invalid SASL: " + config["sasl.username"] + " / " + config["sasl.password"])
+        with patch.object(services.kafka_module, "Producer", side_effect=failure):
+            with self.assertRaises(pipeline.OpenSearchPipelineError) as raised:
+                services.run([event()], kafka_config=config)
+        self.assertEqual(raised.exception.stage, "producer_startup")
+        self.assert_no_credentials(raised.exception.report, config)
+        self.assert_no_credentials("".join(traceback.format_exception(raised.exception)), config)
+        self.assertTrue(raised.exception.__suppress_context__)
+        self.assertIsNone(raised.exception.__cause__)
+
+    def test_cloud_metadata_exception_is_masked_by_public_preflight(self):
+        config, services = cloud_config(), Services()
+        failure = RuntimeError("SASL rejected " + config["sasl.username"] + " / " + config["sasl.password"])
+        admin = TopicAdmin(metadata_failure=failure)
+        with admin.installed(services), patch.object(pipeline, "create_opensearch_client", side_effect=services.search_factory):
+            with self.assertRaisesRegex(RuntimeError, "metadata request failed") as raised:
+                pipeline.prepare_pipeline(topic="persistent.test", index="test-index", kafka_config=config,
+                                          create_topic=False, replication_factor=3, ready_timeout=60)
+        self.assert_no_credentials("".join(traceback.format_exception(raised.exception)), config)
+        self.assertEqual(admin.created, [])
+        self.assertTrue(services.search_clients[0].closed)
+
+    def test_cloud_delivery_and_worker_errors_are_masked_without_advancing_failed_index(self):
+        config = cloud_config()
+        text = "Rejected " + config["sasl.username"] + " / " + config["sasl.password"]
+        for services in (Services(delivery_error=text), Services(search_failures=[RuntimeError(text)])):
+            with self.subTest(kind="delivery" if services.delivery_error else "worker"):
+                with self.assertRaises(pipeline.OpenSearchPipelineError) as raised:
+                    services.run([event()], kafka_config=config)
+                self.assert_no_credentials(raised.exception.report, config)
+                self.assert_no_credentials("".join(traceback.format_exception(raised.exception)), config)
+                if not services.delivery_error:
+                    self.assertEqual(raised.exception.report["committed"], 0)
+                    self.assertNotIn("stable-group", services.group_offsets)
+                self.assertTrue(services.consumers[0].closed)
+
+    def test_broker_error_hint_is_masked_in_progress_and_final_reports(self):
+        services, config, snapshots = Services(), cloud_config(), []
+
+        def source():
+            services.producers[0].config["error_cb"](
+                "CLUSTER_AUTHORIZATION_FAILED: " + config["sasl.username"] + " / " + config["sasl.password"])
+            yield event()
+
+        report = services.run(source(), kafka_config=config, on_progress=snapshots.append)
+        self.assertIn("IDEMPOTENT_WRITE", report["broker_errors"][0])
+        self.assert_no_credentials((report, snapshots), config)
 
 
 if __name__ == "__main__":

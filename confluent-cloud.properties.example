@@ -1,0 +1,16 @@
+# Copy this file to confluent-cloud.properties in the project root.
+# Replace the placeholders with the Kafka cluster endpoint and Kafka API key.
+# Keep the real file private. Never paste its contents into notebook output.
+# Python/librdkafka format: one literal key=value per line, without quotes.
+# This loader does not accept Java JAAS, Schema Registry, or client-role options.
+
+bootstrap.servers=<BOOTSTRAP_DNS_NAME>:9092
+security.protocol=SASL_SSL
+sasl.mechanism=PLAIN
+sasl.username=<KAFKA_API_KEY>
+sasl.password=<KAFKA_API_SECRET>
+
+# Optional connection settings; leave commented unless needed.
+# client.id=<OPTIONAL_CLIENT_ID>
+# ssl.ca.location=<OPTIONAL_CA_BUNDLE_PATH>
+# Certificate and hostname verification are enforced by the loader.

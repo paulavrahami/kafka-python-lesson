@@ -17,11 +17,12 @@ code{font-family:Consolas,"Cascadia Code",monospace;font-size:.91em;direction:lt
 </head>
 <body><main>
 <header><div class="eyebrow" dir="rtl">ד״ר פאול אברהמי · מעבדת Kafka בפייתון</div>
-<h1 dir="rtl" align="right">מדריך התקנה — Kafka ו־OpenSearch</h1><p dir="rtl" align="right">הכנת Windows, Cursor, uv ו־Docker Desktop לשתי מחברות הלימוד. פקודות קצרות, בדיקת חיבור והסבר היכן מריצים כל שלב.</p></header>
+<h1 dir="rtl" align="right">מדריך התקנה — Kafka ו־OpenSearch</h1><p dir="rtl" align="right">הכנת Windows, Cursor, uv ו־Docker Desktop למחברות הלימוד המקומיות ולחלופת Kafka בענן. פקודות קצרות, בדיקת חיבור והסבר היכן מריצים כל שלב.</p></header>
 <nav aria-label="ניווט במדריכים"><a href="START_HERE_HE.html">מתחילים כאן</a> | <a href="Kafka_Installation_Guide_HE.html">מדריך התקנה</a> | <a href="https://github.com/paulavrahami/kafka-python-lesson/blob/main/docs/NOTEBOOK_WALKTHROUGH_HE.md">הסבר מלא לשתי המחברות</a></nav>
 <section dir="rtl" lang="he" align="right">
+<p dir="rtl" align="right"><strong>עובדים עם Confluent Cloud?</strong> מחברת <a href="03_Wikimedia_Confluent_Cloud_HE.ipynb">03</a> משתמשת ב־Kafka בענן. בצעו את התקנת Python/uv ואת הכנת OpenSearch, ודלגו על הפעלת Kafka המקומי בסעיף 4. את הקמת האשכול, ההרשאות וקובץ החיבור מבצעים לפי <a href="https://github.com/paulavrahami/kafka-python-lesson/blob/main/docs/CONFLUENT_CLOUD_HE.md">מדריך הענן</a>.</p>
 <h2 dir="rtl" align="right">1. מה מורידים ולמה?</h2>
-<p dir="rtl" align="right">ההוראות מיועדות ל־Windows עם Cursor מקומי ו־Docker Desktop במצב Linux containers. אין צורך בחשבון ענן. המחברת הראשונה צריכה Kafka; השנייה צריכה גם OpenSearch וחיבור אינטרנט ל־Wikimedia.</p>
+<p dir="rtl" align="right">ההוראות מיועדות ל־Windows עם Cursor מקומי ו־Docker Desktop במצב Linux containers. במחברות 01 ו־02 אין צורך בחשבון ענן; מחברת 03 משתמשת ב־Confluent Cloud. המחברת הראשונה צריכה Kafka; השנייה צריכה גם OpenSearch וחיבור אינטרנט ל־Wikimedia.</p>
 <table dir="rtl" width="100%">
 <thead><tr>
 <th dir="rtl" align="right">רכיב</th>
@@ -41,7 +42,7 @@ uv --version</code></pre><section dir="rtl" lang="he" align="right">
 <p dir="rtl" align="right">ב־PowerShell:</p>
 </section><pre dir="ltr" align="left"><code class="language-powershell" dir="ltr">git clone https://github.com/paulavrahami/kafka-python-lesson.git
 cd kafka-python-lesson</code></pre><section dir="rtl" lang="he" align="right">
-<p dir="rtl" align="right">ב־Cursor בחרו <strong>File → Open Folder</strong> ופתחו את <code dir="ltr">kafka-python-lesson</code>. פתחו <strong>Terminal → New Terminal</strong>. כל הפקודות הבאות פועלות מתוך אותה תיקייה, שבה נמצאים <code dir="ltr">pyproject.toml</code>, <code dir="ltr">uv.lock</code>, שתי המחברות והתיקייה <code dir="ltr">scripts</code>.</p>
+<p dir="rtl" align="right">ב־Cursor בחרו <strong>File → Open Folder</strong> ופתחו את <code dir="ltr">kafka-python-lesson</code>. פתחו <strong>Terminal → New Terminal</strong>. כל הפקודות הבאות פועלות מתוך אותה תיקייה, שבה נמצאים <code dir="ltr">pyproject.toml</code>, <code dir="ltr">uv.lock</code>, המחברות והתיקייה <code dir="ltr">scripts</code>.</p>
 <p dir="rtl" align="right">אם כבר הורדתם את הפרויקט, אין צורך לשכפל שוב. שמרו שינויים שלכם, ועדכנו את העותק באמצעות Git. אם Git מציג התנגשות עם שינויים מקומיים, פתרו אותה לפני החלפת קבצים; אין צורך למחוק את תיקיית העבודה.</p>
 </section><pre dir="ltr" align="left"><code class="language-powershell" dir="ltr">git pull
 uv python install 3.13.12

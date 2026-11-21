@@ -61,10 +61,46 @@ def _names(topic, index):
         raise ValueError("Use one concrete lowercase OpenSearch index name")
 
 
-def _kafka_config(bootstrap_servers):
-    return {"bootstrap.servers": bootstrap_servers, "broker.address.family": "v4",
-            "socket.timeout.ms": 10000, "socket.connection.setup.timeout.ms": 5000,
-            "allow.auto.create.topics": False}
+def _kafka_config(bootstrap_servers, kafka_config=None):
+    """Return connection settings; role guarantees are added by each client.
+
+    A supplied cloud mapping is authoritative, including its bootstrap address.
+    Only the shared loader's connection/security allowlist is accepted, so it
+    cannot replace commits, idempotence, callbacks or queue bounds.
+    """
+    if kafka_config is None:
+        return {"bootstrap.servers": bootstrap_servers, "broker.address.family": "v4",
+                "socket.timeout.ms": 10000, "socket.connection.setup.timeout.ms": 5000,
+                "allow.auto.create.topics": False}
+    from scripts.confluent_cloud import validate_kafka_connection_config
+    connection = validate_kafka_connection_config(kafka_config)
+    return {**connection, "broker.address.family": "any",
+            "socket.timeout.ms": 30000, "socket.connection.setup.timeout.ms": 30000,
+            "api.version.request.timeout.ms": 30000, "allow.auto.create.topics": False,
+            # Native stderr messages bypass Python redaction. Structured errors
+            # still reach metadata exceptions, consumer.poll and error_cb.
+            "log_level": 0}
+
+
+def _kafka_error_text(error, connection):
+    if "sasl.password" in connection:
+        from scripts.confluent_cloud import redact_kafka_error
+        message = redact_kafka_error(error, connection)
+    else:
+        message = str(error)
+    normalized = message.lower().replace("_", " ")
+    if "cluster authorization failed" in normalized:
+        message += (" Check the cluster policy for idempotent producers (InitProducerId); "
+                    "where required, grant IDEMPOTENT_WRITE.")
+    return message
+
+
+def _topic_options(partitions, create_topic, replication_factor):
+    for name, value in (("partitions", partitions), ("replication_factor", replication_factor)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if not isinstance(create_topic, bool):
+        raise ValueError("create_topic must be a boolean")
 
 
 def create_opensearch_client(opensearch_url="http://127.0.0.1:9200", *, request_timeout=5):
@@ -96,78 +132,123 @@ def create_opensearch_client(opensearch_url="http://127.0.0.1:9200", *, request_
     return OpenSearch(**options)
 
 
-def _prepare_kafka_topic(topic, bootstrap_servers, partitions, ready_timeout):
+def _prepare_kafka_topic(topic, bootstrap_servers, partitions, ready_timeout, *,
+                         kafka_config=None, create_topic=True, replication_factor=1):
     from confluent_kafka import KafkaError, KafkaException
     from confluent_kafka.admin import AdminClient, NewTopic
-    admin = AdminClient(_kafka_config(bootstrap_servers))
-    metadata = admin.list_topics(timeout=min(10, ready_timeout))
-    created = False
-    if topic not in metadata.topics:
-        future = admin.create_topics(
-            [NewTopic(topic, num_partitions=partitions, replication_factor=1)],
-            operation_timeout=min(10, ready_timeout), request_timeout=min(15, ready_timeout),
-        )[topic]
-        try:
-            future.result(timeout=ready_timeout)
-            created = True
-        except KafkaException as exc:
-            if exc.args[0].code() != KafkaError.TOPIC_ALREADY_EXISTS:
-                raise
+    _topic_options(partitions, create_topic, replication_factor)
+    _positive_seconds("ready_timeout", ready_timeout)
+    connection = _kafka_config(bootstrap_servers, kafka_config)
+    try:
+        admin = AdminClient(connection)
+    except Exception as error:
+        raise RuntimeError("Kafka AdminClient could not start: " + _kafka_error_text(error, connection)) from None
+    created = creation_requested = False
+    request_limit = 30 if kafka_config is not None else 10
     deadline = time.monotonic() + ready_timeout
     while time.monotonic() < deadline:
-        metadata = admin.list_topics(timeout=max(0.01, min(5, deadline - time.monotonic())))
+        try:
+            # Request this topic only. With auto creation disabled, this works
+            # with topic-scoped ACLs and never needs a cluster-wide topic list.
+            metadata = admin.list_topics(topic=topic, timeout=max(0.01, min(request_limit, deadline - time.monotonic())))
+        except Exception as error:
+            raise RuntimeError("Kafka topic metadata request failed: " + _kafka_error_text(error, connection)
+                               + ". Check connectivity, Kafka API credentials and DESCRIBE access to this topic.") from None
         info = metadata.topics.get(topic)
-        if info is not None and info.error is None and info.partitions:
+        if info is not None and info.error is not None:
+            problem = info.error
+            code = problem.code()
+            if code == KafkaError.TOPIC_AUTHORIZATION_FAILED:
+                raise PermissionError("Kafka topic metadata access was denied; grant DESCRIBE on the requested topic. "
+                                      "The check does not need access to other topics or CREATE when create_topic=False.") from None
+            if code == KafkaError.UNKNOWN_TOPIC_OR_PART:
+                info = None
+            elif code != KafkaError.LEADER_NOT_AVAILABLE:
+                raise RuntimeError("Kafka topic metadata error: " + _kafka_error_text(problem, connection)) from None
+        if info is None:
+            if not create_topic:
+                raise RuntimeError("The requested Kafka topic is missing or not visible. Create it in the cluster "
+                                   "with the expected partitions and grant topic access, then retry. No topic was created.") from None
+            if not creation_requested:
+                try:
+                    remaining = max(0.01, deadline - time.monotonic())
+                    future = admin.create_topics(
+                        [NewTopic(topic, num_partitions=partitions, replication_factor=replication_factor)],
+                        operation_timeout=min(request_limit, remaining), request_timeout=min(request_limit, remaining),
+                    )[topic]
+                    future.result(timeout=remaining)
+                    created = True
+                except KafkaException as error:
+                    if error.args[0].code() != KafkaError.TOPIC_ALREADY_EXISTS:
+                        raise RuntimeError("Kafka topic creation failed: " + _kafka_error_text(error, connection)) from None
+                except Exception as error:
+                    raise RuntimeError("Kafka topic creation failed: " + _kafka_error_text(error, connection)) from None
+                creation_requested = True
+                continue
+        elif info.error is None and info.partitions:
             if len(info.partitions) != partitions:
                 raise RuntimeError("The existing topic has a different partition count; it was not modified")
             if all(part.error is None and part.leader in metadata.brokers and part.leader in part.isrs
                    for part in info.partitions.values()):
                 return {"topic": topic, "partitions": partitions, "topic_created": created}
+        if kafka_config is None:
+            request_limit = 5
         time.sleep(max(0, min(0.25, deadline - time.monotonic())))
     raise TimeoutError("Kafka topic did not acquire ready partition leaders")
 
 
 def prepare_pipeline(*, topic, bootstrap_servers="127.0.0.1:9092",
                      opensearch_url="http://127.0.0.1:9200", index="wikimedia-recentchanges",
-                     request_timeout=5, ready_timeout=30, partitions=3):
+                     request_timeout=5, ready_timeout=30, partitions=3,
+                     kafka_config=None, create_topic=True, replication_factor=1):
     """Check services and create only a missing lesson topic/index.
 
     Existing resources and offsets are retained. A new local index uses one
     primary shard, no replicas and an explicit strict mapping. Kafka uses one
-    replica copy for the single-broker lab. This helper does not delete data.
+    replica copy by default for the single-broker lab. With create_topic=False,
+    Kafka metadata is read only for the named, pre-created topic. For Cloud,
+    supply a validated connection mapping and allow ready_timeout=60 for TLS.
+    This helper does not delete data or print connection credentials.
     """
     _names(topic, index)
     _positive_seconds("request_timeout", request_timeout)
     _positive_seconds("ready_timeout", ready_timeout)
-    if isinstance(partitions, bool) or not isinstance(partitions, int) or partitions <= 0:
-        raise ValueError("partitions must be a positive integer")
-    client = create_opensearch_client(opensearch_url, request_timeout=request_timeout)
+    _topic_options(partitions, create_topic, replication_factor)
+    connection = _kafka_config(bootstrap_servers, kafka_config)
     try:
-        version = client.info(request_timeout=request_timeout).get("version", {}).get("number", "unknown")
-        created = False
-        if not client.indices.exists(index=index, request_timeout=request_timeout):
-            try:
-                result = client.indices.create(index=index, body={
-                    "settings": {"number_of_shards": 1, "number_of_replicas": 0},
-                    "mappings": {"dynamic": "strict", "properties": INDEX_PROPERTIES},
-                }, request_timeout=request_timeout)
-                if not result.get("acknowledged"):
-                    raise RuntimeError("OpenSearch did not acknowledge index creation")
-                created = True
-            except Exception as exc:
-                if getattr(exc, "error", None) != "resource_already_exists_exception":
-                    raise
-        mapping = client.indices.get_mapping(index=index, request_timeout=request_timeout)
-        properties = mapping.get(index, {}).get("mappings", {}).get("properties", {})
-        incompatible = [name for name, spec in INDEX_PROPERTIES.items()
-                        if properties.get(name, {}).get("type") != spec["type"]]
-        if incompatible:
-            raise RuntimeError("Existing OpenSearch mapping is incompatible for fields: " + ", ".join(incompatible))
-    finally:
-        client.close()
-    result = _prepare_kafka_topic(topic, bootstrap_servers, partitions, ready_timeout)
-    return {**result, "index": index, "index_created": created, "opensearch_version": version,
-            "indexed_fields": list(INDEX_PROPERTIES)}
+        client = create_opensearch_client(opensearch_url, request_timeout=request_timeout)
+        try:
+            version = client.info(request_timeout=request_timeout).get("version", {}).get("number", "unknown")
+            created = False
+            if not client.indices.exists(index=index, request_timeout=request_timeout):
+                try:
+                    result = client.indices.create(index=index, body={
+                        "settings": {"number_of_shards": 1, "number_of_replicas": 0},
+                        "mappings": {"dynamic": "strict", "properties": INDEX_PROPERTIES},
+                    }, request_timeout=request_timeout)
+                    if not result.get("acknowledged"):
+                        raise RuntimeError("OpenSearch did not acknowledge index creation")
+                    created = True
+                except Exception as exc:
+                    if getattr(exc, "error", None) != "resource_already_exists_exception":
+                        raise
+            mapping = client.indices.get_mapping(index=index, request_timeout=request_timeout)
+            properties = mapping.get(index, {}).get("mappings", {}).get("properties", {})
+            incompatible = [name for name, spec in INDEX_PROPERTIES.items()
+                            if properties.get(name, {}).get("type") != spec["type"]]
+            if incompatible:
+                raise RuntimeError("Existing OpenSearch mapping is incompatible for fields: " + ", ".join(incompatible))
+        finally:
+            client.close()
+        result = _prepare_kafka_topic(topic, connection["bootstrap.servers"], partitions, ready_timeout,
+                                      kafka_config=kafka_config, create_topic=create_topic,
+                                      replication_factor=replication_factor)
+        return {**result, "index": index, "index_created": created, "opensearch_version": version,
+                "indexed_fields": list(INDEX_PROPERTIES)}
+    except Exception as error:
+        if kafka_config is not None:
+            raise RuntimeError(_kafka_error_text(error, connection)) from None
+        raise
 
 
 def _event_fields(event):
@@ -213,7 +294,7 @@ def run_opensearch_pipeline(
     group_id="python-wikimedia-opensearch", stop_event=None, on_progress=None,
     progress_every=25, drain_seconds=15, request_timeout=5, max_index_retries=2,
     max_pending=1000, queue_wait_seconds=5, delivery_timeout_seconds=30,
-    preflight=True,
+    preflight=True, kafka_config=None, create_topic=True, replication_factor=1,
 ):
     """Run until source exhaustion, shared stop_event or notebook interruption.
 
@@ -226,6 +307,11 @@ def run_opensearch_pipeline(
     OpenSearchPipelineError with a partial report. on_progress may execute in
     the worker thread and must be quick/thread-safe. Native calls use finite
     timeouts, so interruption and shutdown are cooperative, not instantaneous.
+
+    Optional kafka_config supplies connection/security fields for Cloud and
+    takes precedence over bootstrap_servers. Consumer/Producer guarantees and
+    bounded queues are retained. Set create_topic=False for pre-created Cloud
+    topics; replication_factor is used only when creating a missing topic.
     """
     _names(topic, index)
     for name, value in (("drain_seconds", drain_seconds), ("request_timeout", request_timeout),
@@ -238,6 +324,10 @@ def run_opensearch_pipeline(
         raise ValueError("max_index_retries must be a nonnegative integer")
     if not isinstance(group_id, str) or not group_id:
         raise ValueError("Use a persistent, nonempty group_id")
+    _topic_options(3, create_topic, replication_factor)
+    connection = _kafka_config(bootstrap_servers, kafka_config)
+    cloud = kafka_config is not None
+    worker_timeout = request_timeout + 12 + (30 if cloud else 0)
     from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
     source_stop = stop_event if stop_event is not None else threading.Event()
@@ -272,7 +362,7 @@ def run_opensearch_pipeline(
 
     def broker_error(problem):
         with lock:
-            state["broker_errors"].append(str(problem))
+            state["broker_errors"].append(_kafka_error_text(problem, connection)[:500])
             del state["broker_errors"][:-8]
 
     def delivered(problem, message):
@@ -283,7 +373,7 @@ def run_opensearch_pipeline(
                 confirmed_offsets[part] = max(confirmed_offsets.get(part, -1), message.offset())
             else:
                 state["delivery_failed"] += 1
-                state["delivery_errors"].append(str(problem))
+                state["delivery_errors"].append(_kafka_error_text(problem, connection)[:500])
                 del state["delivery_errors"][:-8]
                 source_stop.set()
 
@@ -311,7 +401,7 @@ def run_opensearch_pipeline(
         last_report = time.monotonic()
         try:
             client = create_opensearch_client(opensearch_url, request_timeout=request_timeout)
-            consumer = Consumer({**_kafka_config(bootstrap_servers), "group.id": group_id,
+            consumer = Consumer({**connection, "group.id": group_id,
                                  "enable.auto.commit": False, "enable.auto.offset.store": False,
                                  "auto.offset.reset": "earliest", "queued.max.messages.kbytes": 1024})
             consumer.subscribe([topic])
@@ -358,7 +448,7 @@ def run_opensearch_pipeline(
                     last_report = time.monotonic()
         except BaseException as problem:
             with lock:
-                state["worker_errors"].append(f"{type(problem).__name__}: {str(problem)[:500]}")
+                state["worker_errors"].append(f"{type(problem).__name__}: {_kafka_error_text(problem, connection)[:500]}")
                 del state["worker_errors"][:-8]
             source_stop.set()
         finally:
@@ -376,17 +466,18 @@ def run_opensearch_pipeline(
 
     try:
         if preflight:
-            prepare_pipeline(topic=topic, bootstrap_servers=bootstrap_servers, opensearch_url=opensearch_url,
-                             index=index, request_timeout=request_timeout)
+            prepare_pipeline(topic=topic, bootstrap_servers=connection["bootstrap.servers"], opensearch_url=opensearch_url,
+                             index=index, request_timeout=request_timeout, ready_timeout=60 if cloud else 30,
+                             kafka_config=kafka_config, create_topic=create_topic, replication_factor=replication_factor)
         stage = "producer_startup"
-        producer = Producer({**_kafka_config(bootstrap_servers), "enable.idempotence": True, "acks": "all",
+        producer = Producer({**connection, "enable.idempotence": True, "acks": "all",
                              "delivery.timeout.ms": int(delivery_timeout_seconds * 1000),
                              "queue.buffering.max.messages": max_pending, "queue.buffering.max.kbytes": 1024,
                              "error_cb": broker_error})
         stage = "consumer_startup"
         worker = threading.Thread(target=consume, name=f"wikimedia-opensearch-{run_id[:8]}", daemon=True)
         worker.start()
-        if not ready.wait(request_timeout + 12) or state["worker_errors"]:
+        if not ready.wait(worker_timeout) or state["worker_errors"]:
             raise RuntimeError("Consumer/OpenSearch worker could not start")
         iterator = iter(events)
         stage = "source"
@@ -453,7 +544,7 @@ def run_opensearch_pipeline(
                 # Outstanding Kafka records remain available for the same group.
                 stop_reason += "_drain_timeout"
             consumer_stop.set()
-            worker.join(timeout=max(12, request_timeout + 12))
+            worker.join(timeout=max(12, worker_timeout))
             if worker.is_alive():
                 error, stage = RuntimeError("Consumer worker has not closed within the shutdown limit"), "consumer_shutdown"
 
@@ -469,7 +560,11 @@ def run_opensearch_pipeline(
             stage = "consumer" if result["worker_errors"] else "delivery"
         result["status"] = "failed"
         if error is not None:
-            result["error"] = f"{type(error).__name__}: {str(error)[:500]}"
+            result["error"] = f"{type(error).__name__}: {_kafka_error_text(error, connection)[:500]}"
+        if cloud:
+            # The original exception can contain SASL values even after its
+            # message is masked; do not expose it as a traceback cause.
+            raise OpenSearchPipelineError(stage, result) from None
         raise OpenSearchPipelineError(stage, result) from error
     if on_progress is not None:
         on_progress(result)

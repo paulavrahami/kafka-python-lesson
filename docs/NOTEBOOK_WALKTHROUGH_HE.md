@@ -12,6 +12,7 @@
 <tr><td dir="rtl" align="right"><a href="../01_Kafka_Synthetic_HE.ipynb">1. יסודות Kafka</a></td><td dir="rtl" align="right">עשרה אירועים סינתטיים קבועים.</td><td dir="rtl" align="right">הרצה סופית; Kafka אמיתי כברירת מחדל.</td><td dir="rtl" align="right">הוכחת מסירה וקריאה, Replay, ספירות וחלונות.</td></tr>
 <tr><td dir="rtl" align="right"><a href="../02_Wikimedia_Streaming_OpenSearch_HE.ipynb">2. Wikimedia Streaming</a></td><td dir="rtl" align="right">מקור חי; אין תקרת כמות או זמן כוללת.</td><td dir="rtl" align="right">קליטה וצריכה במקביל, עד עצירה ידנית.</td><td dir="rtl" align="right">מסמכים ב־OpenSearch וחיפוש וסיכום שלהם.</td></tr>
 </tbody></table>
+<p dir="rtl" align="right"><strong>חלופה עם Kafka בענן:</strong> <a href="../03_Wikimedia_Confluent_Cloud_HE.ipynb">מחברת 03 — Confluent Cloud</a> מריצה את תהליך הפרויקט השני עם Kafka מנוהל בענן. Python ו־OpenSearch נשארים מקומיים כברירת מחדל. המושגים והשאילתות כאן נשארים רלוונטיים; את הוראות החשבון, ה־API Key וההרשאות תמצאו ב־<a href="CONFLUENT_CLOUD_HE.md">מדריך החיבור לענן</a>.</p>
 <p dir="rtl" align="right">אין צורך ללמוד את כל קובצי העזר מראש. קראו תא הסבר, הריצו את תא הקוד שאחריו, והשוו את הפלט לציפייה המתוארת כאן. הקוד המשותף נמצא בתיקייה <code dir="ltr">scripts</code> כדי שתאי המחברת יישארו קצרים וברורים.</p>
 </div>
 

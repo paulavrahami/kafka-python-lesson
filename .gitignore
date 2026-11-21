@@ -5,5 +5,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+# Local Cloud credentials and backup copies; the template remains public.
+confluent-cloud*.properties
+confluent-cloud*.properties.*
+!confluent-cloud.properties.example
 .DS_Store
 Thumbs.db

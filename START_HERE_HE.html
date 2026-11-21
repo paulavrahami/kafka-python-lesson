@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>מתחילים כאן — שני פרויקטים ב־Kafka</title>
+<title>מתחילים כאן — Kafka מקומי ובענן</title>
 <style>
 :root{color-scheme:light;--ink:#172f47;--muted:#4c6275;--teal:#087f85;--line:#d8e3ea;--paper:#fff;--wash:#f2f7fa}
 *{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font-family:Arial,"Noto Sans Hebrew",sans-serif;font-size:18px;line-height:1.8;direction:rtl;text-align:right}
@@ -17,7 +17,7 @@ code{font-family:Consolas,"Cascadia Code",monospace;font-size:.91em;direction:lt
 </head>
 <body><main>
 <header><div class="eyebrow" dir="rtl">ד״ר פאול אברהמי · מעבדת Kafka בפייתון</div>
-<h1 dir="rtl" align="right">מתחילים כאן — שני פרויקטים ב־Kafka</h1><p dir="rtl" align="right">עשרה אירועים ידועים ללימוד היסודות, ואחריהם זרם Wikimedia רציף אל OpenSearch. סביבת העבודה: Cursor, uv ו־Python 3.13.12.</p></header>
+<h1 dir="rtl" align="right">מתחילים כאן — Kafka מקומי ובענן</h1><p dir="rtl" align="right">שלוש מחברות: יסודות עם עשרה אירועים ידועים, זרם Wikimedia מקומי, וגרסת אותו זרם דרך Confluent Cloud. סביבת העבודה: Cursor, uv ו־Python 3.13.12.</p></header>
 <nav aria-label="ניווט במדריכים"><a href="START_HERE_HE.html">מתחילים כאן</a> | <a href="Kafka_Installation_Guide_HE.html">מדריך התקנה</a> | <a href="https://github.com/paulavrahami/kafka-python-lesson/blob/main/docs/NOTEBOOK_WALKTHROUGH_HE.md">הסבר מלא לשתי המחברות</a></nav>
 <section dir="rtl" lang="he" align="right">
 <h2 dir="rtl" align="right">בוחרים מסלול לפי סדר הלימוד</h2>
@@ -29,6 +29,7 @@ code{font-family:Consolas,"Cascadia Code",monospace;font-size:.91em;direction:lt
 </tr></thead><tbody>
 <tr><td dir="rtl" align="right"><a href="01_Kafka_Synthetic_HE.ipynb"><strong>01 — עשרה אירועים סינתטיים</strong></a></td><td dir="rtl" align="right">Producer, מחיצות, Consumer, Replay, Commit וחלונות זמן עם תשובות ידועות.</td><td dir="rtl" align="right">Cursor, Python ו־Kafka.</td></tr>
 <tr><td dir="rtl" align="right"><a href="02_Wikimedia_Streaming_OpenSearch_HE.ipynb"><strong>02 — Wikimedia Streaming אל OpenSearch</strong></a></td><td dir="rtl" align="right">קליטה ועיבוד במקביל, שמירה לפני Commit, חיפוש והמשך מהרצה קודמת.</td><td dir="rtl" align="right">Cursor, Python, Kafka, OpenSearch וחיבור אינטרנט.</td></tr>
+<tr><td dir="rtl" align="right"><a href="03_Wikimedia_Confluent_Cloud_HE.ipynb"><strong>3. Streaming דרך Confluent Cloud</strong></a></td><td dir="rtl" align="right">אותו מקור Wikimedia ואותו יעד OpenSearch, עם Kafka מנוהל בענן וחיבור SASL/TLS.</td><td dir="rtl" align="right">Cursor, Python, חשבון Confluent Cloud ו־OpenSearch.</td></tr>
 </tbody></table>
 <p dir="rtl" align="right">הקישורים למחברות מצביעים לקבצים בתיקייה. כדי להריץ אותם, פתחו את כל תיקיית הפרויקט ב־Cursor ובחרו את המחברת בחלונית הקבצים. לפתיחת הוראות ההתקנה לחצו על <a href="Kafka_Installation_Guide_HE.html">מדריך התקנה מלא</a>.</p>
 </section><section dir="rtl" lang="he" align="right">
@@ -61,13 +62,17 @@ MAX_SECONDS = None</code></pre><section dir="rtl" lang="he" align="right">
 <p dir="rtl" align="right"><strong>כדי לעבור לשאילתות:</strong> לחצו על עצירת התא, המתינו לסגירה ובטלו את המשך Run All אם צריך. לאחר מכן הריצו ידנית את תאי הדוח, הספירה, החיפוש והסיכומים. אין צורך לאתחל את ה־Kernel.</p>
 <p dir="rtl" align="right">אפשר לצפות בספירה גם בזמן הקליטה דרך <a href="http://127.0.0.1:9200/wikimedia-recentchanges-v1/_count">עמוד count המקומי</a>. מוני ההרצה אינם בהכרח ספירת מסמכים ייחודיים: ייתכנו כתיבות חוזרות או קריאה של backlog קודם.</p>
 </section><section dir="rtl" lang="he" align="right">
+<h2 dir="rtl" align="right">מחברת 03: אותו Streaming עם Kafka בענן</h2>
+<p dir="rtl" align="right">פתחו את <a href="03_Wikimedia_Confluent_Cloud_HE.ipynb">מחברת 03</a> לאחר ההכנה ב־<a href="https://github.com/paulavrahami/kafka-python-lesson/blob/main/docs/CONFLUENT_CLOUD_HE.md">מדריך Confluent Cloud</a>. Kafka פועל בענן; Python רץ ב־Cursor, ו־OpenSearch נשאר מקומי. במסלול הזה מדלגים על הפעלת Kafka המקומי.</p>
+<p dir="rtl" align="right">קובץ הדוגמה <code dir="ltr">confluent-cloud.properties.example</code> מגדיר את חמשת שדות החיבור. מכינים ממנו עותק מקומי בשם <code dir="ltr">confluent-cloud.properties</code>, שמוחרג מ־Git. התא הראשון במחברת טוען את ההגדרות בלי להדפיס את המפתחות.</p>
+<p dir="rtl" align="right">עצירת המחברת אינה מוחקת משאבי ענן ואינה מפסיקה בהכרח חיובים. בסיום בדקו את המשאבים בחשבון הענן.</p>
 <h2 dir="rtl" align="right">בסיום המעבדה</h2>
 <p dir="rtl" align="right">אחרי סיום תא הזרם, במסוף:</p>
 </section><pre dir="ltr" align="left"><code class="language-powershell" dir="ltr">uv run --locked python scripts/opensearch_docker.py stop
 uv run --locked python scripts/kafka_docker.py stop</code></pre><section dir="rtl" lang="he" align="right">
 <p dir="rtl" align="right">המכולות נשארות במקומן ונתוני OpenSearch נשמרים ב־volume. בפעם הבאה משתמשים שוב בפקודות start. אותה קבוצת צרכנים ממשיכה מהמיקום התקף ששמרה; סמן Wikimedia שבזיכרון אינו משוחזר אחרי אתחול Kernel.</p>
 <p dir="rtl" align="right">לשאלות על המושגים, התוצאות והמונים קראו את <a href="https://github.com/paulavrahami/kafka-python-lesson/blob/main/docs/NOTEBOOK_WALKTHROUGH_HE.md">המדריך המפורט לשתי המחברות</a>, או פתחו ב־Cursor את <code dir="ltr">docs/NOTEBOOK_WALKTHROUGH_HE.md</code>.</p>
-<p dir="rtl" align="right">המחברת המשולבת <code dir="ltr">Kafka_Python_Step_by_Step_HE.ipynb</code> נשמרת לעיון בגרסה הקודמת. את השיעור הנוכחי מתחילים בשתי המחברות הממוספרות.</p>
+<p dir="rtl" align="right">המחברת המשולבת <code dir="ltr">Kafka_Python_Step_by_Step_HE.ipynb</code> נשמרת לעיון בגרסה הקודמת. את השיעור מתחילים במחברת 01; ממשיכים ב־02 עבור Kafka מקומי או ב־03 עבור Kafka בענן.</p>
 </section>
 <div class="footer" dir="rtl">הקוד והמחברות נמצאים ב־<a href="https://github.com/paulavrahami/kafka-python-lesson">GitHub</a>. פקודות במסוף וקוד Python מוצגים משמאל לימין; ההסברים בעברית מימין לשמאל.</div>
 </main></body></html>

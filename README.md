@@ -1,6 +1,6 @@
 <div dir="rtl" lang="he" align="right">
-<h1 dir="rtl" align="right">Kafka עם Python — שתי מחברות, שני פרויקטים</h1>
-<p dir="rtl" align="right">מעבדה לסטודנטים בעברית, בסביבת <strong>Cursor + uv + Python 3.13.12</strong>. מתחילים בעשרה אירועים מוכרים כדי להבין Kafka, ואז מפעילים זרם אמיתי מ־Wikimedia ושומרים אותו ב־OpenSearch עד עצירה יזומה.</p>
+<h1 dir="rtl" align="right">Kafka עם Python — יסודות, Streaming מקומי וענן</h1>
+<p dir="rtl" align="right">מעבדה לסטודנטים בעברית, בסביבת <strong>Cursor + uv + Python 3.13.12</strong>. מתחילים בעשרה אירועים מוכרים כדי להבין Kafka, ואז מפעילים זרם אמיתי מ־Wikimedia ושומרים אותו ב־OpenSearch עד עצירה יזומה — עם Kafka מקומי או ב־Confluent Cloud.</p>
 <table dir="rtl" width="100%">
 <thead><tr>
 <th dir="rtl" align="right">סדר הלימוד</th>
@@ -9,6 +9,7 @@
 </tr></thead><tbody>
 <tr><td dir="rtl" align="right"><a href="01_Kafka_Synthetic_HE.ipynb"><strong>1. עשרה אירועים סינתטיים</strong></a></td><td dir="rtl" align="right">שולחים עשרה אירועים ל־Kafka מקומי, קוראים אותם, מדגימים Replay ומחשבים ספירות וחלונות.</td><td dir="rtl" align="right">הרצה סופית. אפשר להפעיל Run All.</td></tr>
 <tr><td dir="rtl" align="right"><a href="02_Wikimedia_Streaming_OpenSearch_HE.ipynb"><strong>2. Wikimedia Streaming אל OpenSearch</strong></a></td><td dir="rtl" align="right">קולטים אירועים ברצף; Producer שולח ל־Kafka ו־Consumer כותב למסמכי OpenSearch.</td><td dir="rtl" align="right">אין מגבלת כמות או זמן כוללת. עוצרים את תא הזרם ידנית.</td></tr>
+<tr><td dir="rtl" align="right"><a href="03_Wikimedia_Confluent_Cloud_HE.ipynb"><strong>3. Streaming דרך Confluent Cloud</strong></a></td><td dir="rtl" align="right">אותו מקור Wikimedia ואותו יעד OpenSearch, עם Kafka מנוהל בענן וחיבור SASL/TLS.</td><td dir="rtl" align="right">ללא מגבלת כמות או זמן כוללת; עוצרים ידנית. נדרשים חשבון ענן ו־Kafka API Key.</td></tr>
 </tbody></table>
 <p dir="rtl" align="right"><strong>להסבר צעד אחר צעד:</strong> <a href="docs/NOTEBOOK_WALKTHROUGH_HE.md">המדריך המפורט לשתי המחברות</a>. הוא כולל שני תרשימים, מושגים, תוצאות צפויות ופירוש המונים.</p>
 <p dir="rtl" align="right"><strong>להתחלה במחשב:</strong> פתחו מקומית בדפדפן את <a href="START_HERE_HE.html">START_HERE_HE.html</a>. להתקנה מלאה ולפתרון תקלות פתחו את <a href="Kafka_Installation_Guide_HE.html">Kafka_Installation_Guide_HE.html</a>. GitHub עשוי להציג את קוד ה־HTML; את הגרסה המעוצבת פותחים מתוך תיקיית הפרויקט שהורדתם.</p>
@@ -26,7 +27,7 @@
 <tr><td dir="rtl" align="right"><a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a></td><td dir="rtl" align="right">התקנת Python 3.13.12 וניהול חבילות לפי uv.lock.</td></tr>
 <tr><td dir="rtl" align="right"><a href="https://docs.docker.com/desktop/setup/install/windows-install/">Docker Desktop</a></td><td dir="rtl" align="right">הפעלת Kafka ו־OpenSearch במכולות Linux מקומיות.</td></tr>
 </tbody></table>
-<p dir="rtl" align="right">המסלול מניח ש־Cursor וה־Kernel רצים מקומית באותו מחשב שבו פועל Docker Desktop. אין צורך בחשבון Confluent או בשירות ענן למעבדה זו.</p>
+<p dir="rtl" align="right">המסלול מניח ש־Cursor וה־Kernel רצים מקומית באותו מחשב שבו פועל Docker Desktop. במחברות 01 ו־02 אין צורך בחשבון Confluent או בשירות ענן. מחברת 03 משתמשת בחשבון Confluent Cloud לפי הוראות הענן בהמשך.</p>
 </div>
 
 <div dir="rtl" lang="he" align="right">
@@ -91,6 +92,14 @@ MAX_SECONDS = None
 </div>
 
 <div dir="rtl" lang="he" align="right">
+<h2 dir="rtl" align="right">4. מריצים את גרסת הענן — מחברת 03</h2>
+<p dir="rtl" align="right"><a href="03_Wikimedia_Confluent_Cloud_HE.ipynb">מחברת 03</a> מריצה את תהליך מחברת 02 מול <strong>Confluent Cloud</strong>. Kafka פועל בענן; קוד Python רץ ב־Cursor; OpenSearch נשאר מקומי כברירת מחדל. במסלול הזה אין צורך להפעיל Kafka ב־Docker.</p>
+<p dir="rtl" align="right">תחילה הכינו ב־Confluent Cloud אשכול נגיש, Topic בשם <code dir="ltr">python.wikimedia.cloud.v1</code> עם שלוש מחיצות, הרשאות מתאימות ו־Kafka API Key. את ההוראות המדויקות תמצאו ב־<a href="docs/CONFLUENT_CLOUD_HE.md">מדריך החיבור לענן</a>.</p>
+<p dir="rtl" align="right">העתיקו פעם אחת את <code dir="ltr">confluent-cloud.properties.example</code> לקובץ <code dir="ltr">confluent-cloud.properties</code>, והכניסו לעותק המקומי את הכתובת, המפתח והסוד. הקובץ האמיתי מוחרג מ־Git. אין להכניס סודות לתאי המחברת או להדפיס את מילון החיבור.</p>
+<p dir="rtl" align="right">פתחו את מחברת 03 ובחרו את ה־Kernel של <code dir="ltr">.venv</code>. ההכנה בודקת Topic קיים בלבד; אישורי המסירה וה־Commit נבדקים במהלך הזרימה. עצירת המחברת אינה מוחקת משאבים בענן או מפסיקה בהכרח את חיובם.</p>
+</div>
+
+<div dir="rtl" lang="he" align="right">
 <h2 dir="rtl" align="right">פקודות שימושיות</h2>
 <p dir="rtl" align="right">מצב ולוגים:</p>
 </div>
@@ -129,6 +138,6 @@ uv run --locked python scripts/kafka_docker.py stop
 <tr><td dir="rtl" align="right"><a href="tests"><code dir="ltr">tests/</code></a></td><td dir="rtl" align="right">בדיקות אוטומטיות להתנהגות, להתאוששות, לקליטה ולהכנת השירותים.</td></tr>
 </tbody></table>
 <p dir="rtl" align="right">כלולות בדיקות אוטומטיות, כולל תרחישי כשל ושירותים מדומים. חיבור מלא של Docker, Kafka ו־OpenSearch תלוי בסביבת המחשב ונבדק באמצעות תאי ההכנה והרצתכם; אין להסיק ממעבר בדיקות מדומות ששרתים חיים נבדקו.</p>
-<p dir="rtl" align="right">המחברת <a href="Kafka_Python_Step_by_Step_HE.ipynb"><code dir="ltr">Kafka_Python_Step_by_Step_HE.ipynb</code></a> נשמרת <strong>לעיון בגרסה המשולבת הקודמת בלבד</strong>. מסלול הלימוד הנוכחי הוא מחברות 01 ו־02 לעיל.</p>
+<p dir="rtl" align="right">המחברת <a href="Kafka_Python_Step_by_Step_HE.ipynb"><code dir="ltr">Kafka_Python_Step_by_Step_HE.ipynb</code></a> נשמרת <strong>לעיון בגרסה המשולבת הקודמת בלבד</strong>. מסלול הלימוד הוא מחברת 01 ליסודות, ומחברת 02 לזרימה מקומית או מחברת 03 לזרימה דרך Kafka בענן.</p>
 <p dir="rtl" align="right">המעבדה נכתבה בפייתון בהשראת <a href="https://github.com/conduktor/kafka-beginners-course">קורס Kafka למתחילים של Conduktor</a>. מקורות רשמיים והסבר מפורט נמצאים במדריך שתי המחברות.</p>
 </div>
