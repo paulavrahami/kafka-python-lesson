@@ -15,7 +15,7 @@ def helpers():
                  "json": json, "islice": islice, "time": time}
     for cell in notebook["cells"]:
         source = "".join(cell["source"]) if isinstance(cell["source"], list) else cell["source"]
-        if cell["cell_type"] == "code" and ("def ensure_topics(" in source or "def publish_json_rows(" in source):
+        if cell["cell_type"] == "code" and any(name in source for name in ("def ensure_topics(", "def publish_json_rows(", "def consume_events(")):
             exec(compile(source, "notebook-helper", "exec"), namespace)
     return namespace
 
@@ -67,10 +67,14 @@ class ReadinessTests(unittest.TestCase):
         from confluent_kafka.admin import AdminClient
         admin = Mock(spec=AdminClient)
         admin.list_topics.return_value = metadata()
-        with patch("confluent_kafka.admin.AdminClient", return_value=admin):
+        with patch("confluent_kafka.admin.AdminClient", return_value=admin) as constructor:
             result = self.ns["ensure_topics"](["wiki.test"])
         self.assertEqual(result, {"wiki.test": 3})
         admin.create_topics.assert_not_called()
+        self.assertEqual(constructor.call_count, 2)
+        for call in constructor.call_args_list:
+            self.assertEqual(call.args[0]["broker.address.family"], "v4")
+            self.assertEqual(call.args[0]["socket.connection.setup.timeout.ms"], 5000)
 
     def test_advertised_connection_failure_is_specific(self):
         from confluent_kafka import KafkaError, KafkaException
@@ -95,6 +99,35 @@ class ReadinessTests(unittest.TestCase):
                 self.ns["ensure_topics"](["wiki.test"])
         self.assertEqual(raised.exception.args[0]["stage"], "topic_creation")
         self.assertEqual(raised.exception.args[0]["topic"], "wiki.test")
+
+    def test_metadata_retry_keeps_same_client_and_timeout(self):
+        from confluent_kafka import KafkaError, KafkaException
+        client = Mock()
+        expected = metadata()
+        client.list_topics.side_effect = [KafkaException(KafkaError(KafkaError._TIMED_OUT)), expected]
+        with patch.object(time, "sleep") as sleep:
+            actual = self.ns["_read_kafka_metadata"](client, timeout=4)
+        self.assertIs(actual, expected)
+        self.assertEqual(client.list_topics.call_count, 2)
+        self.assertTrue(all(call.kwargs == {"timeout": 4} for call in client.list_topics.call_args_list))
+        sleep.assert_called_once_with(0.25)
+
+    def test_metadata_retry_does_not_repeat_permanent_failure(self):
+        from confluent_kafka import KafkaError, KafkaException
+        client = Mock()
+        client.list_topics.side_effect = KafkaException(KafkaError(KafkaError.TOPIC_AUTHORIZATION_FAILED))
+        with patch.object(time, "sleep") as sleep, self.assertRaises(KafkaException):
+            self.ns["_read_kafka_metadata"](client)
+        self.assertEqual(client.list_topics.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_metadata_retry_has_a_two_attempt_limit(self):
+        from confluent_kafka import KafkaError, KafkaException
+        client = Mock()
+        client.list_topics.side_effect = KafkaException(KafkaError(KafkaError._TIMED_OUT))
+        with patch.object(time, "sleep"), self.assertRaises(KafkaException):
+            self.ns["_read_kafka_metadata"](client)
+        self.assertEqual(client.list_topics.call_count, 2)
 
 
 class DeliveryTests(unittest.TestCase):
@@ -156,6 +189,18 @@ class DeliveryTests(unittest.TestCase):
         self.ns["ensure_topics"].assert_called_once_with(["wiki.test"])
         self.assertFalse(producer.config["allow.auto.create.topics"])
         self.assertTrue(producer.config["enable.idempotence"])
+        self.assertEqual(producer.config["broker.address.family"], "v4")
+        self.assertEqual(producer.config["socket.connection.setup.timeout.ms"], 5000)
+
+    def test_consumer_uses_the_same_ipv4_policy(self):
+        consumer = Mock()
+        with patch("confluent_kafka.Consumer", return_value=consumer) as constructor:
+            result = self.ns["consume_events"]("wiki.test", "group-test", lambda event: None, max_messages=0)
+        self.assertEqual(result, [])
+        config = constructor.call_args.args[0]
+        self.assertEqual(config["broker.address.family"], "v4")
+        self.assertEqual(config["socket.connection.setup.timeout.ms"], 5000)
+        consumer.close.assert_called_once()
 
 
 if __name__ == "__main__":

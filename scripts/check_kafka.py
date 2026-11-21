@@ -4,21 +4,50 @@ Run: uv run --locked python scripts/check_kafka.py
 For one notebook topic, append: --topic NAME
 This checks both the bootstrap address and the broker addresses Kafka advertises.
 It does not create topics, produce messages, or change consumer offsets.
+IPv4 is the default for this lab's 127.0.0.1 Docker port binding.
+Each address gets at most two metadata requests; --timeout applies to each request.
 """
 
 import argparse
 import sys
+import time
 
 
-def metadata(address, timeout, admin_class):
+def _transient_metadata_error(exc):
+    # Keep successful metadata doubles and the missing-package CLI independent
+    # of this import. Only actual Kafka errors qualify for a retry.
+    try:
+        from confluent_kafka import KafkaError, KafkaException
+    except ImportError:
+        return False
+    if not isinstance(exc, KafkaException) or not exc.args:
+        return False
+    error = exc.args[0]
+    return isinstance(error, KafkaError) and (
+        error.retriable()
+        or error.code() in {KafkaError._TIMED_OUT, KafkaError._TRANSPORT, KafkaError._ALL_BROKERS_DOWN}
+    )
+
+
+def metadata(address, timeout, admin_class, address_family="v4"):
+    """Read metadata with one bounded retry on the same client for transient errors."""
     client = admin_class({
         "bootstrap.servers": address,
         "client.id": "kafka-python-lesson-check",
+        "broker.address.family": address_family,
+        "socket.connection.setup.timeout.ms": 5000,
         "socket.timeout.ms": int(timeout * 1000),
         "allow.auto.create.topics": False,
         "log_level": 0,
     })
-    return client.list_topics(timeout=timeout)
+    for attempt in range(2):
+        try:
+            return client.list_topics(timeout=timeout)
+        except Exception as exc:
+            if attempt == 1 or not _transient_metadata_error(exc):
+                raise
+            # Retain the client's DNS/connection progress between requests.
+            time.sleep(0.25)
 
 
 def endpoint(host, port):
@@ -56,14 +85,18 @@ def check_topic_metadata(cluster, topic):
     print("Topic metadata OK: every partition has an advertised, synchronized leader.")
 
 
-def check(address, timeout, admin_class, topic=None):
-    first = metadata(address, timeout, admin_class)
+def check(address, timeout, admin_class, topic=None, address_family="v4"):
+    print(f"Connection settings: broker.address.family={address_family}; connection setup timeout=5000 ms.")
+    print(f"Metadata: at most 2 requests per address, {timeout:g} seconds per request.")
+    print(f"Checking bootstrap metadata: {address}", flush=True)
+    first = metadata(address, timeout, admin_class, address_family=address_family)
     if not first.brokers:
         raise RuntimeError("Kafka answered without any brokers in its metadata.")
     print(f"Bootstrap metadata OK: {address}")
     for broker in first.brokers.values():
         advertised = endpoint(broker.host, broker.port)
-        response = metadata(advertised, timeout, admin_class)
+        print(f"Checking advertised broker metadata: {advertised} (broker {broker.id})", flush=True)
+        response = metadata(advertised, timeout, admin_class, address_family=address_family)
         if not response.brokers:
             raise RuntimeError(f"Broker {advertised} answered without any broker metadata.")
         if first.cluster_id and response.cluster_id and first.cluster_id != response.cluster_id:
@@ -79,7 +112,10 @@ def check(address, timeout, admin_class, topic=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bootstrap-servers", default="127.0.0.1:9092")
-    parser.add_argument("--timeout", type=float, default=10, help="Seconds per metadata request (default: 10)")
+    parser.add_argument("--timeout", type=float, default=10,
+                        help="Seconds per metadata request; at most 2 requests per address (default: 10)")
+    parser.add_argument("--address-family", choices=("any", "v4", "v6"), default="v4",
+                        help="Broker IP family; v4 matches this lab's Docker binding (default: v4)")
     parser.add_argument("--topic", help="Inspect an existing topic's partitions, leaders, replicas and ISR")
     args = parser.parse_args(argv)
     if args.timeout < 1 or args.timeout > 60:
@@ -92,7 +128,8 @@ def main(argv=None):
         print("Missing confluent-kafka. Run uv sync --locked in the project directory.", file=sys.stderr)
         return 1
     try:
-        check(args.bootstrap_servers, args.timeout, AdminClient, topic=args.topic)
+        check(args.bootstrap_servers, args.timeout, AdminClient, topic=args.topic,
+              address_family=args.address_family)
         return 0
     except Exception as exc:
         print(f"ERROR: Kafka metadata connection failed: {exc}", file=sys.stderr)

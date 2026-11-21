@@ -81,7 +81,7 @@ class TopicDiagnosticsTests(unittest.TestCase):
         with patch.object(diagnostics, "check") as check:
             code = diagnostics.main(["--topic", "wiki.current"])
         self.assertEqual(code, 0)
-        self.assertEqual(check.call_args.kwargs, {"topic": "wiki.current"})
+        self.assertEqual(check.call_args.kwargs, {"topic": "wiki.current", "address_family": "v4"})
 
 
 if __name__ == "__main__":
