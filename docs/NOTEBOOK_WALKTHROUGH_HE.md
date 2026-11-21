@@ -12,7 +12,8 @@
 
 <p dir="rtl" align="right">הדוגמה שלנו עוסקת באירועים שמייצגים שינויים בדפי <span dir="ltr">Wikipedia</span>. באמצעותם אנחנו לומדים גם את המנגנונים של <span dir="ltr">Kafka</span> וגם שאלות מעשיות: איך קוראים את אותם נתונים בכמה יישומים, מה עושים אחרי תקלה, ואיך הופכים אירועים בודדים לסיכומים לפי אתר ולפי זמן.</p>
 
-<p dir="rtl" align="right">המדריך עובר לפי השלבים במחברת ומסביר גם את הפלטים. הוא מתייחס לקוד ב<a href="https://github.com/paulavrahami/kafka-python-lesson/blob/1be968619f4d6cc95659b9055c9f2ddb9e1c5ee8/Kafka_Python_Step_by_Step_HE.ipynb">גרסת המחברת שעליה עבדנו</a>.</p>
+<p dir="rtl" align="right">המדריך עובר לפי השלבים במחברת ומסביר את הפלטים. הוא מתייחס ל־<a href="../Kafka_Python_Step_by_Step_HE.ipynb">מחברת שבפרויקט</a>, כולל שלב <span dir="ltr">17</span> החדש לקליטה ולעיבוד במקביל.</p>
+
 
 <p dir="rtl" align="right"><strong>התצורה המרכזית המתוארת כאן היא:</strong></p>
 
@@ -77,9 +78,9 @@ RUN_LIVE_OPENSEARCH = False
 
 <p dir="rtl" align="right">כשאנחנו אומרים “שלחנו הודעה ל־<span dir="ltr">Kafka</span>”, קוד <span dir="ltr">Python</span> פנה לשרת דרך <code dir="ltr">127.0.0.1:9092</code>. כשאנחנו אומרים “צרכנו הודעה”, קוד <span dir="ltr">Python</span> קיבל מהשרת רשומה שנשמרה בו.</p>
 
-<h2 dir="rtl" align="right"><span dir="ltr">2</span>. התמונה הגדולה: שני מסלולים במחברת</h2>
+<h2 dir="rtl" align="right"><span dir="ltr">2</span>. התמונה הגדולה: שני מסלולי הדגימה במחברת</h2>
 
-<p dir="rtl" align="right">במחברת יש שני מסלולים עיקריים. ההפרדה הזאת חשובה להבנת הקוד:</p>
+<p dir="rtl" align="right">בשלבים <span dir="ltr">1–16</span> יש שני מסלולי דגימה עיקריים. בשלב <span dir="ltr">17</span> נוסף מסלול <span dir="ltr">Streaming</span> נפרד. ההפרדה חשובה להבנת הקוד:</p>
 
 </div>
 
@@ -906,11 +907,12 @@ RUN_LIVE_OPENSEARCH = False
 
 <p dir="rtl" align="right"><span dir="ltr">Wikimedia</span> מציעה שירות אירועים דרך <span dir="ltr">HTTP</span> בפרוטוקול <span dir="ltr">SSE</span> — <span dir="ltr">Server-Sent Events</span>. <a href="https://wikitech.wikimedia.org/wiki/Event_Platform/EventStreams">מקור: <span dir="ltr">Wikimedia EventStreams</span></a>.</p>
 
-<p dir="rtl" align="right">במחברת מגדירים שתי פונקציות:</p>
+<p dir="rtl" align="right">בשלב זה משתמשים בשלוש פונקציות; מנגנון החיבור המלא נמצא ב־<code dir="ltr">scripts/wikimedia_stream.py</code>:</p>
 
 <ul dir="rtl" align="right">
-<li dir="rtl" align="right"><code dir="ltr">parse_sse_blocks()</code> — מפרקת את הטקסט שמגיע מהשירות לאירועים.</li>
-<li dir="rtl" align="right"><code dir="ltr">read_wikimedia_events()</code> — מבצעת את בקשת הרשת ואוספת דגימה מוגבלת.</li>
+<li dir="rtl" align="right"><code dir="ltr">parse_sse_blocks()</code> — מיובאת מקובץ העזר ומפרקת את הטקסט שמגיע מהשירות למסגרות אירוע, כולל סמן המשך והמלצה להשהיה.</li>
+<li dir="rtl" align="right"><code dir="ltr">iter_wikimedia_events()</code> — פותחת חיבור חי ומוסרת אירוע תקין אחד בכל פעם.</li>
+<li dir="rtl" align="right"><code dir="ltr">read_wikimedia_events()</code> — עוטפת את האיטרטור ואוספת ממנו רשימה קטנה לשיעור הדגימה.</li>
 </ul>
 
 <p dir="rtl" align="right">הפענוח מתייחס, בין היתר, לשורה ריקה שמסיימת אירוע, לשורות <code dir="ltr">data:</code> ולשורות הערה שמתחילות בנקודתיים. כללי המבנה האלה מגיעים מפרוטוקול <span dir="ltr">SSE</span>. <a href="https://html.spec.whatwg.org/multipage/server-sent-events.html">מקור: תקן <span dir="ltr">HTML</span> — <span dir="ltr">Server-Sent Events</span></a>.</p>
@@ -940,7 +942,7 @@ else:
 
 <p dir="rtl" align="right">אם <span dir="ltr">Wikimedia</span> כבוי, <code dir="ltr">recent_events</code> מקבל עותק של עשרת אירועי הדוגמה.</p>
 
-<p dir="rtl" align="right">אם הוא מופעל, המשתנה מקבל דגימה מהשירות החי.</p>
+<p dir="rtl" align="right">אם הוא מופעל, המשתנה מקבל דגימה מהשירות החי. מספיק לקבוע <code dir="ltr">RUN_LIVE_WIKIMEDIA = True</code> כדי להחליף את מקור הדגימה. לחיבור גם לשרת המקומי צריך בנוסף <code dir="ltr">RUN_LIVE_KAFKA = True</code>. הדוגמה מוגבלת לעשרה אירועים; סיום הקליטה בשלב הזה מכוון.</p>
 
 <h3 dir="rtl" align="right">ואז מעבירים את הדגימה דרך <span dir="ltr">Kafka</span></h3>
 
@@ -1382,7 +1384,7 @@ time_rows
 
 <p dir="rtl" align="right">כך אנחנו מדגימים שיישום יכול להיות גם <span dir="ltr">Consumer</span> וגם <span dir="ltr">Producer</span>: הוא קורא אירועים גולמיים, מחשב תוצאה ומפרסם אירועים חדשים שמייצגים את התוצאה.</p>
 
-<p dir="rtl" align="right">במחברת הנוכחית אנחנו מסתיימים בפרסום הסיכומים. אפשר לחבר בהמשך יישום נוסף שיקרא אותם ויציג <span dir="ltr">Dashboard</span>, יפיק התראה או יפעיל תהליך אחר.</p>
+<p dir="rtl" align="right">מסלול הדגימה מסתיים בפרסום הסיכומים. שלב <span dir="ltr">17</span> הבא מוסיף ניסוי של עיבוד במקביל לקליטה. אפשר לחבר בהמשך יישום נוסף שיקרא אותם ויציג <span dir="ltr">Dashboard</span>, יפיק התראה או יפעיל תהליך אחר.</p>
 
 <hr>
 
@@ -1503,6 +1505,155 @@ time_rows
 
 <p dir="rtl" align="right"><strong>במעבר נוסף על המחברת, עקבו אחרי אירוע אחד — <code dir="ltr">synthetic-001</code>:</strong> הוא נוצר כמילון, מקודד ל־<span dir="ltr">JSON</span>, נכתב ל־<span dir="ltr">Kafka</span> ונקרא בחזרה. במסלול הניתוח הוא מוסיף אחד לספירת ה־<span dir="ltr">Bots</span>, אחד לספירת האתר האנגלי בדקה הראשונה ואחד לחלון עשר השניות הראשון. זה החיבור בין הרשומה הבודדת לבין התוצאות שרואים בסוף.</p>
 
+<hr>
+
+<h2 dir="rtl" align="right"><span dir="ltr">21</span>. שלב <span dir="ltr">17</span>: קליטה ועיבוד ב־<span dir="ltr">Streaming</span></h2>
+<p dir="rtl" align="right"><b>כן — <code dir="ltr">RUN_LIVE_WIKIMEDIA = True</code> מספיק כדי לקבל נתונים חיים.</b> אבל יש הבדל בין מקור שהוא זרם חי לבין צינור עיבוד שפועל תוך כדי הקליטה. בשלבים הקודמים אוספים דגימה, מסיימים את הקריאה מהאינטרנט, ורק אז שולחים את הרשימה ל־<span dir="ltr">Kafka</span> ומנתחים אותה. בשלב החדש השולח והצרכן פעילים במקביל, וכל אירוע יכול להתקדם בצינור עוד לפני שהמקור סיים.</p>
+<table dir="rtl">
+<tr><th dir="rtl" align="right" width="50%">מסלול הדגימה — שלבים <span dir="ltr">11–16</span></th><th dir="rtl" align="right" width="50%">מסלול הזרימה — שלב <span dir="ltr">17</span></th></tr>
+<tr><td dir="rtl" align="right" width="50%">אוספים עד עשרה אירועים ב־<code dir="ltr">recent_events</code>.</td><td dir="rtl" align="right" width="50%">מוסרים אירוע אחד בכל פעם באמצעות <code dir="ltr">yield</code>.</td></tr>
+<tr><td dir="rtl" align="right" width="50%">השליחה והקריאה מתחילות לאחר סיום איסוף הדגימה.</td><td dir="rtl" align="right" width="50%">השולח שולח בזמן הקליטה, והצרכן קורא ומעבד במקביל.</td></tr>
+<tr><td dir="rtl" align="right" width="50%">הספירות מחושבות מרשימת <code dir="ltr">ANALYSIS_EVENTS</code>.</td><td dir="rtl" align="right" width="50%">הספירות מתעדכנות לכל רשומה שנקראה מהשרת.</td></tr>
+<tr><td dir="rtl" align="right" width="50%">סיכומי הדגימה נכתבים לשלושה <span dir="ltr">Topics</span> בשלב <span dir="ltr">16</span>.</td><td dir="rtl" align="right" width="50%">סיכומי הזרימה מוצגים בזיכרון המחברת ובפלטי ההתקדמות.</td></tr>
+</table>
+<p dir="rtl" align="right"><img src="../diagrams/Wikimedia_Streaming_HE.png" alt="מסלול Streaming: Wikimedia, Producer, Kafka, Consumer וסיכומים מתעדכנים" width="100%"></p>
+<h3 dir="rtl" align="right">א. מפעילים קודם את המסלול החי הפשוט</h3>
+<p dir="rtl" align="right">ודאו ששרת <span dir="ltr">Kafka</span> המקומי פועל. בתא ההגדרות הראשון הגדירו:</p>
+
+</div>
+
+<div dir="ltr" align="left">
+
+```python
+RUN_LIVE_KAFKA = True
+RUN_LIVE_WIKIMEDIA = True
+RUN_LIVE_OPENSEARCH = False
+BOOTSTRAP_SERVERS = "127.0.0.1:9092"
+```
+
+</div>
+
+<div dir="rtl" lang="he" align="right">
+
+<p dir="rtl" align="right">הפעילו <code dir="ltr">Restart Kernel</code> ואז <code dir="ltr">Run All</code>. בשלב <span dir="ltr">12</span> תתקבל דגימה מהמקור הציבורי. השירות כולל ויקיפדיה בשפות שונות, <span dir="ltr">Wikidata</span>, <span dir="ltr">Wikimedia Commons</span> ואתרים נוספים. הופעת אתר שאינו ויקיפדיה אינה תקלה. הכותרת <code dir="ltr">User-Agent</code> מזהה את המעבדה באמצעות שם וקישור למאגר; אפשר להתאים אותה עם <code dir="ltr">WIKIMEDIA_USER_AGENT</code>. <a href="https://wikitech.wikimedia.org/wiki/Event_Platform/EventStreams">מקור: תיעוד <span dir="ltr">EventStreams</span></a>.</p>
+<p dir="rtl" align="right">הפלט הבא הוא <b>דוגמה למבנה הפלט</b>; המספרים בפועל תלויים במה שהגיע:</p>
+
+</div>
+
+<div dir="ltr" align="left">
+
+```text
+LIVE Wikimedia events: 10 | invalid: 0 | canary: 0 | duplicates: 0 | reconnects: 0 | stop: max_events
+LIVE Kafka confirmed: 10 source: LIVE Wikimedia sample
+LIVE Kafka sample for analysis: 10
+```
+
+</div>
+
+<div dir="rtl" lang="he" align="right">
+
+<p dir="rtl" align="right">כשהמקור חי, לא מצפים לחלוקה הסינתטית של שישה בוטים וארבעה אירועים אחרים. בודקים שסכומי הספירות תואמים למספר האירועים שנקראו בפועל. אם לא הגיע אף אירוע תקין, מוצגת שגיאה ברורה; אין החלפה אוטומטית בנתוני דוגמה.</p>
+<h3 dir="rtl" align="right">ב. מפעילים את ניסוי ה־<span dir="ltr">Streaming</span></h3>
+<p dir="rtl" align="right">בתא ההגדרות של שלב <span dir="ltr">17</span> שנו את הדגל והריצו מאותו שלב לפי הסדר:</p>
+
+</div>
+
+<div dir="ltr" align="left">
+
+```python
+RUN_STREAMING_DEMO = True
+STREAM_MAX_EVENTS = 100
+STREAM_SECONDS = 60
+STREAM_SERVER_NAME = None
+STREAM_PROGRESS_EVERY = 10
+```
+
+</div>
+
+<div dir="rtl" lang="he" align="right">
+
+<p dir="rtl" align="right">ברירת המחדל של הדגל החדש היא <code dir="ltr">False</code> כדי ש־<code dir="ltr">Run All</code> לא יפתח ניסוי נוסף בלי בחירה. המגבלה של <span dir="ltr">100</span> אירועים או <span dir="ltr">60</span> שניות אינה הופכת את הקליטה לאצווה: העיבוד עדיין מתרחש אירוע־אחר־אירוע; רק משך הניסוי תחום לצורך השיעור.</p>
+<p dir="rtl" align="right">בתחילת כל הפעלה נוצר <span dir="ltr">Topic</span> חדש ששמו מתחיל ב־<code dir="ltr">python.wikimedia.streaming.</code> וקבוצת צרכנים חדשה. כך לא נספרות בטעות רשומות מהרצה קודמת. לאחר עצירת הקליטה מוקצה זמן נפרד לסיום השליחות ולקריאת הרשומות שנותרו. זמן כולל בפועל יכול להיות ארוך מ־<code dir="ltr">STREAM_SECONDS</code> בגלל זמני רשת וסגירה.</p>
+<p dir="rtl" align="right">להתחלה בחרו <code dir="ltr">None</code> כדי לקבל אירועים מכל האתרים. לסינון ויקיפדיה העברית אפשר להגדיר:</p>
+
+</div>
+
+<div dir="ltr" align="left">
+
+```python
+STREAM_SERVER_NAME = "he.wikipedia.org"
+```
+
+</div>
+
+<div dir="rtl" lang="he" align="right">
+
+<p dir="rtl" align="right">הסינון נעשה במחשב שלנו לאחר קבלת הנתונים. הוא אינו מצמצם את הזרם שהשרת שולח. בחלון קצר ייתכן שלא יגיעו מספיק אירועים מאתר מסוים; המונה <code dir="ltr">filtered</code> מראה כמה אירועים סוננו. ריצה ללא אירועים אינה נחשבת להצלחה.</p>
+<h3 dir="rtl" align="right">ג. מה עושה הקוד בזמן שהקליטה פעילה?</h3>
+<p dir="rtl" align="right">בפלט ההתקדמות, <code dir="ltr">source_open=True</code> פירושו שתהליך הקליטה עדיין פעיל, לרבות המתנה לחיבור חוזר. המדד אינו מוכיח שחיבור HTTP פתוח באותו רגע.</p>
+<p dir="rtl" align="right">הפונקציה <code dir="ltr">iter_wikimedia_events()</code> מוסרת מילון אחד, ומושהית עד שהלולאה מבקשת את הבא. השולח מקודד אותו ל־<span dir="ltr">JSON</span> ומכניס אותו לתור השליחה. הוא משתמש בשם האתר כמפתח ובזמן <code dir="ltr">meta.dt</code> כזמן הרשומה. אותו לקוח <span dir="ltr">Producer</span> משמש לכל הניסוי.</p>
+<p dir="rtl" align="right">במקביל פועל <span dir="ltr">Consumer</span> בתהליכון נפרד, וקורא מה־<span dir="ltr">Topic</span> שהוכן. הסיכומים מחושבים <b>רק מרשומות שהצרכן קיבל מ־<span dir="ltr">Kafka</span></b>. לכל אירוע חדש מתעדכנות ספירת בוטים, ספירה לפי אתר וחלון של דקה, וספירה לכל האתרים בחלון של עשר שניות. לאחר העיבוד נשמר מיקום ההמשך של הרשומה.</p>
+<p dir="rtl" align="right">כל עשר רשומות שעובדו מודפס <code dir="ltr">STREAM progress</code>. התור המקומי מוגבל; אם הוא מלא, הקוד ממתין ומנסה לשלוח את אותו אירוע, עד למגבלת ההמתנה. הוא אינו מדלג בשקט על אירוע כדי להמשיך.</p>
+<h3 dir="rtl" align="right">ד. פירוש המונים ובדיקת התוצאה</h3>
+<table dir="rtl">
+<tr><th dir="rtl" align="right" width="35%">שדה</th><th dir="rtl" align="right" width="65%">פירוש</th></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">frames</code></td><td dir="rtl" align="right" width="65%">מסגרות <span dir="ltr">SSE</span> שלמות שהגיעו, לפני סינון.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">received</code></td><td dir="rtl" align="right" width="65%">אירועים תקינים וייחודיים שהמקור מסר לאחר סינון.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">accepted</code></td><td dir="rtl" align="right" width="65%">רשומות שהשולח קיבל לתור המקומי שלו.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">confirmed</code></td><td dir="rtl" align="right" width="65%">רשומות שהתקבל עבורן אישור מסירה מוצלח.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">consumed</code></td><td dir="rtl" align="right" width="65%">רשומות שנקראו מה־<span dir="ltr">Topic</span> ועברו אימות.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">committed</code></td><td dir="rtl" align="right" width="65%">רשומות שעובדו ושמירת מיקום ההמשך שלהן אושרה.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">unique_processed</code></td><td dir="rtl" align="right" width="65%">מזהי <code dir="ltr">meta.id</code> ייחודיים שנכללו בספירות.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">processed_while_source_open</code></td><td dir="rtl" align="right" width="65%">רשומות שהצרכן סיים לעבד לפני שהמקור סיים. זו מדידה של חפיפה בפועל.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">complete</code></td><td dir="rtl" align="right" width="65%">סיום תקין עם קלט שאינו ריק, ללא שגיאות והתאמה בין מספרי השליחה, האישור, הקריאה ושמירת ההתקדמות.</td></tr>
+</table>
+<p dir="rtl" align="right">במהלך הריצה המונים אינם חייבים להיות שווים. נתונים יכולים להיות בתור או ברשת. גם <code dir="ltr">consumed</code> עשוי להקדים זמנית את <code dir="ltr">confirmed</code>, כי אישורי השליחה מתעדכנים כאשר השולח מטפל ב־<span dir="ltr">callbacks</span>. בסיומה של ריצה מוצלחת מתקיים:</p>
+
+</div>
+
+<div dir="ltr" align="left">
+
+```python
+accepted == confirmed == consumed == committed
+```
+
+</div>
+
+<div dir="rtl" lang="he" align="right">
+
+<p dir="rtl" align="right">בנוסף, סכום <code dir="ltr">bot_counts</code> וסכומי החלונות שווים ל־<code dir="ltr">unique_processed</code>. הקוד בודק זאת. <code dir="ltr">complete=True</code> מעיד שהאירועים התקבלו ועובדו; הוא אינו מבטיח שמדד החפיפה יהיה חיובי. דגימה מהירה יכולה להסתיים לפני העיבוד הראשון. כדי לצפות בזרימה לאורך זמן, הגדילו את מספר האירועים, למשל ל־<span dir="ltr">1000</span>.</p>
+<p dir="rtl" align="right">הדוח כולל גם <code dir="ltr">first_source_seconds</code>, <code dir="ltr">first_consumer_seconds</code> ו־<code dir="ltr">source_finished_seconds</code>. באמצעותם אפשר להבין מתי החלה הקליטה, מתי הצרכן קרא לראשונה ומתי המקור סיים. החלונות מתעדכנים בזיכרון המחברת; בניסוי הזה הם אינם נכתבים אוטומטית לשלושת <span dir="ltr">Topics</span> התוצאה של מסלול הדגימה.</p>
+<h3 dir="rtl" align="right">ה. ניתוקים, כפילויות וזמן האירוע</h3>
+<table dir="rtl">
+<tr><th dir="rtl" align="right" width="35%">מזהה</th><th dir="rtl" align="right" width="65%">תפקיד</th></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">SSE id / Last-Event-ID</code></td><td dir="rtl" align="right" width="65%">סמן במקור החיצוני שמאפשר ניסיון חידוש של חיבור שנקטע.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">meta.id</code></td><td dir="rtl" align="right" width="65%">זהות האירוע, שבעזרתה מזהים חזרה על אותו אירוע במהלך הניסוי.</td></tr>
+<tr><td dir="rtl" align="right" width="35%"><code dir="ltr">Topic / Partition / Offset</code></td><td dir="rtl" align="right" width="65%">מיקום הרשומה בשרת <span dir="ltr">Kafka</span> המקומי.</td></tr>
+</table>
+<p dir="rtl" align="right">הקורא מנסה לחדש חיבור שנקטע עד פעמיים, ושולח את סמן המקור שבזיכרון. הוא מכבד הנחיות השהיה של השרת, ומציג שגיאה אם אי אפשר להמשיך במסגרת זמן הניסוי. אירועי ניטור <span dir="ltr">Canary</span>, נתונים לא תקינים וכפילויות נספרים בנפרד. חידוש מקור אינו הבטחת מסירה ל־<span dir="ltr">Kafka</span>; לכך נבדקים אישורי השולח והצרכן.</p>
+<p dir="rtl" align="right">כאשר שתי מגבלות האירועים זהות, ייתכן שהצינור ידווח <code dir="ltr">stop_reason=max_events</code> והמקור ידווח <code dir="ltr">closed_by_consumer</code>. זה צפוי: הלולאה שקיבלה את האירוע האחרון סגרה את המקור לאחר שהגיעה למגבלה.</p>
+<p dir="rtl" align="right">המונים, קבוצת המזהים שנראו וסמן המקור נשמרים בזיכרון הניסוי. שמירת מיקום <span dir="ltr">Kafka</span> אינה שומרת אותם יחד בעסקה. לכן זו מעבדה ללימוד זרימה, ללא הבטחת <code dir="ltr">exactly-once</code> מקצה לקצה או שחזור של המונים אחרי אתחול ה־<span dir="ltr">Kernel</span>.</p>
+<p dir="rtl" align="right">החלונות נקבעים לפי זמן האירוע <code dir="ltr">meta.dt</code>, ולא לפי רגע הגעתו. אירוע מאוחר יכול לעדכן חלון מוקדם יותר בתוך אותו ניסוי. לא הוגדרו כאן <span dir="ltr">watermarks</span>, שמירת מצב קבועה או סגירה סופית של חלונות; הפלטים הם תמונות מצב מתעדכנות.</p>
+<h3 dir="rtl" align="right">ו. איך בודקים את החיבור ומה נבדק בפועל?</h3>
+<p dir="rtl" align="right">לבדיקת מקור <span dir="ltr">Wikimedia</span> בלבד, בלי להפעיל <span dir="ltr">Kafka</span>, הריצו במסוף מתוך תיקיית הפרויקט:</p>
+
+</div>
+
+<div dir="ltr" align="left">
+
+```powershell
+uv run --locked python scripts/wikimedia_stream.py --max-events 20 --seconds 30
+```
+
+</div>
+
+<div dir="rtl" lang="he" align="right">
+
+<p dir="rtl" align="right">הסקריפט מציג אתר, זמן אירוע וסימון בוט עבור מספר מצומצם של אירועים, ולאחר מכן דוח מונים. קוד יציאה אפס מעיד שנקלטו אירועים ללא שגיאת מקור. אם לא נקלט אף אירוע, מוחזר קוד יציאה שאינו אפס.</p>
+<p dir="rtl" align="right"><b>בבדיקה שבוצעה ב־<span dir="ltr">21.11.2026</span></b> התקבלה תשובת <code dir="ltr">200</code> מסוג <code dir="ltr">text/event-stream</code>. הסקריפט החדש קלט <span dir="ltr">20</span> אירועים אמיתיים בחיבור אחד, ללא שגיאות פענוח, ללא כפילויות וללא חיבור חוזר; סיבת הסיום הייתה <code dir="ltr">max_events</code>. זו בדיקה של המקור החי.</p>
+<p dir="rtl" align="right">נבדק גם תא בחירת המקור במחברת עצמה עם <code dir="ltr">RUN_LIVE_WIKIMEDIA=True</code>: נקלטו עשרה אירועים חיים, וחישובי הבוטים וחלונות הזמן עברו את בדיקות הסכומים. בדיקה זו התבצעה בלי חיבור לשרת <span dir="ltr">Kafka</span>.</p>
+<p dir="rtl" align="right">בנוסף, <span dir="ltr">36</span> תאי הקוד הורצו ברצף במסלול המקומי עם <span dir="ltr">Python 3.13.12</span>. בדיקות אוטומטיות מדמות ניתוקים, חידוש לפי סמן, תור מלא, כשל באישור מסירה, כשל בשמירת התקדמות, מקור ריק ועיבוד מקביל לפני סיום המקור. בדיקות <span dir="ltr">Kafka</span> משתמשות בלקוחות מדומים.</p>
+<p dir="rtl" align="right"><b>המסלול המלא מול שרת <span dir="ltr">Kafka</span> חי לא הורץ בסביבת ההכנה, שבה אין <span dir="ltr">Docker</span>.</b> במחשב שבו השרת המקומי כבר פועל, שלב <span dir="ltr">17</span> מספק את בדיקת הקצה לקצה באמצעות המונים ודוח הסיום. אין להסיק מבדיקת המקור בלבד שהחיבור לכל שרת <span dir="ltr">Kafka</span> כבר אומת.</p>
 <hr>
 
 <h2 dir="rtl" align="right">מקורות וקריאה נוספת</h2>
