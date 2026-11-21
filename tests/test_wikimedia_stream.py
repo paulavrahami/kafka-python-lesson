@@ -40,7 +40,7 @@ class Response:
     def iter_content(self, chunk_size):
         for chunk in self.chunks:
             self.iterated_chunks += 1
-            if isinstance(chunk, Exception):
+            if isinstance(chunk, BaseException):
                 raise chunk
             if callable(chunk):
                 chunk = chunk()
@@ -286,7 +286,8 @@ class SourceTests(unittest.TestCase):
     def test_invalid_limits_fail_before_network_access(self):
         options = [{"max_events": 0}, {"max_events": True}, {"max_seconds": 0},
                    {"max_seconds": float("inf")}, {"max_reconnects": -1},
-                   {"user_agent": "bad\nheader"}, {"server_name": ""}]
+                   {"user_agent": "bad\nheader"}, {"server_name": ""},
+                   {"dedup_capacity": 0}, {"dedup_capacity": True}]
         with patch.object(requests, "Session") as factory:
             for config in options:
                 with self.subTest(config=config), self.assertRaises(ValueError):
@@ -313,6 +314,112 @@ class SourceTests(unittest.TestCase):
         self.assertNotIn("person", output.getvalue())
         self.assertNotIn(record["title"], output.getvalue())
         self.assertIn('"has_resume_cursor": true', output.getvalue())
+
+    def test_continuous_mode_exceeds_default_limits_until_cancelled(self):
+        now = [0.0]
+        stop = threading.Event()
+        def timed_frame(index):
+            def chunk():
+                now[0] += 61
+                return frame(event(f"e{index}"), f"cursor-{index}")
+            return chunk
+        response = Response([timed_frame(i) for i in range(151)])
+        session = Session(response)
+        stats, records = {}, []
+        with patch.object(requests, "Session", return_value=session), patch.object(stream.time, "monotonic", side_effect=lambda: now[0]):
+            for record in stream.iter_wikimedia_events(max_events=None, max_seconds=None,
+                                                       stats=stats, stop_event=stop):
+                records.append(record)
+                if len(records) == 151:
+                    stop.set()
+        self.assertEqual(len(records), 151)
+        self.assertGreater(stats["elapsed_seconds"], 60)
+        self.assertEqual(stats["stop_reason"], "cancelled")
+        self.assertEqual(session.calls[0][1]["timeout"], (5.0, 3.0))
+        self.assertTrue(response.closed and session.closed)
+
+    def test_none_time_limit_preserves_explicit_event_limit(self):
+        records, stats, _, _ = self.collect([Response([frame(event("e1")), frame(event("e2"))])],
+                                            max_events=2, max_seconds=None)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(stats["stop_reason"], "max_events")
+
+    def test_none_event_limit_preserves_explicit_time_limit(self):
+        now = [0.0]
+        def late_chunk():
+            now[0] = 30
+            return b": heartbeat\n\n"
+        with patch.object(stream.time, "monotonic", side_effect=lambda: now[0]):
+            records, stats, _, _ = self.collect([Response([late_chunk])], max_events=None, max_seconds=10)
+        self.assertEqual(records, [])
+        self.assertEqual(stats["stop_reason"], "time_limit")
+
+    def test_continuous_recent_id_cache_is_bounded_and_uses_lru_eviction(self):
+        response = Response([frame(event(identifier)) for identifier in ["e1", "e2", "e1", "e3", "e2"]])
+        session = Session(response)
+        stop = threading.Event()
+        stats, accepted = {}, []
+        with patch.object(requests, "Session", return_value=session):
+            for record in stream.iter_wikimedia_events(max_events=None, max_seconds=None,
+                                                       dedup_capacity=2, stats=stats, stop_event=stop):
+                accepted.append(record["meta"]["id"])
+                self.assertLessEqual(stats["dedup_cache_size"], 2)
+                if len(accepted) == 4:
+                    stop.set()
+        self.assertEqual(accepted, ["e1", "e2", "e3", "e2"])
+        self.assertEqual(stats["duplicates"], 1)
+        self.assertEqual(stats["dedup_evictions"], 2)
+        self.assertEqual(stats["dedup_cache_size"], 2)
+
+    def test_bounded_run_retains_all_ids_as_before(self):
+        response = Response([frame(event(identifier)) for identifier in ["e1", "e2", "e3", "e1", "e4"]])
+        records, stats, _, _ = self.collect([response], max_events=4, dedup_capacity=2)
+        self.assertEqual([record["meta"]["id"] for record in records], ["e1", "e2", "e3", "e4"])
+        self.assertEqual(stats["duplicates"], 1)
+        self.assertEqual(stats["dedup_cache_size"], 4)
+        self.assertEqual(stats["dedup_evictions"], 0)
+
+    def test_validated_progress_resets_consecutive_reconnect_budget(self):
+        responses = [Response([frame(event(f"e{i}"), f"cursor-{i}"),
+                               requests.exceptions.ConnectionError("disconnect")]) for i in range(3)]
+        responses.append(Response([frame(event("e3"), "cursor-3")]))
+        records, stats, session, _ = self.collect(responses, max_events=4, max_reconnects=1)
+        self.assertEqual(len(records), 4)
+        self.assertEqual(stats["reconnects"], 3)
+        self.assertEqual(stats["consecutive_reconnects"], 0)
+        self.assertEqual(len(session.calls), 4)
+
+    def test_continuous_retry_wait_is_cancellable_without_early_reconnect(self):
+        class StopOnWait:
+            stopped = False
+            waited = None
+            def is_set(self):
+                return self.stopped
+            def wait(self, seconds):
+                self.waited = seconds
+                self.stopped = True
+                return True
+        stop = StopOnWait()
+        response = Response(status=429, headers={"Retry-After": "120"})
+        records, stats, session, _ = self.collect([response], max_events=None,
+                                                  max_seconds=None, stop_event=stop)
+        self.assertEqual(records, [])
+        self.assertEqual(stop.waited, 120.0)
+        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(stats["stop_reason"], "cancelled")
+
+    def test_continuous_cli_removes_total_limits_and_cleans_up_on_interrupt(self):
+        response = Response([frame(), KeyboardInterrupt()])
+        session = Session(response)
+        output = io.StringIO()
+        with patch.object(requests, "Session", return_value=session), contextlib.redirect_stdout(output):
+            with patch.object(stream, "iter_wikimedia_events", wraps=stream.iter_wikimedia_events) as iterator:
+                code = stream.main(["--continuous"])
+        self.assertEqual(code, 130)
+        self.assertIsNone(iterator.call_args.kwargs["max_events"])
+        self.assertIsNone(iterator.call_args.kwargs["max_seconds"])
+        self.assertTrue(response.closed and session.closed)
+        self.assertIn('"stop_reason": "interrupted"', output.getvalue())
 
 
 if __name__ == "__main__":

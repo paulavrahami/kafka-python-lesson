@@ -1,13 +1,15 @@
-"""Bounded, event-by-event Wikimedia EventStreams source for the classroom lab.
+"""Event-by-event Wikimedia EventStreams source for bounded or continuous labs.
 
 The duration is checked between network reads and events. Connect/read timeouts
 bound an idle request, but max_seconds is not a hard wall-clock deadline for DNS,
 the operating system, or a downstream handler. The in-memory SSE cursor supports
 short reconnects; it is not a durable checkpoint or a Kafka delivery guarantee.
+Use max_events=None and max_seconds=None for continuous intake until cancellation.
 """
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
 from contextlib import closing
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -25,6 +27,7 @@ MAX_EVENT_BYTES = 262144
 MAX_LINE_BYTES = 262144
 CONNECT_TIMEOUT = 5.0
 READ_TIMEOUT = 3.0
+DEFAULT_DEDUP_CAPACITY = 10000
 
 
 class WikimediaStreamError(RuntimeError):
@@ -43,14 +46,15 @@ def parse_sse_blocks(lines, deadline=None, max_lines=200000, *, state=None,
     A cursor from an incomplete final frame is deliberately not advanced, so a
     reconnect can replay data rather than silently skip an incomplete event.
     """
-    if not isinstance(max_lines, int) or isinstance(max_lines, bool) or max_lines <= 0:
-        raise ValueError("max_lines must be a positive integer")
+    if max_lines is not None and (not isinstance(max_lines, int)
+                                 or isinstance(max_lines, bool) or max_lines <= 0):
+        raise ValueError("max_lines must be a positive integer or None")
     state = state if state is not None else {}
     cursor = state.get("last_event_id", "")
     data, event_type, size = [], "message", 0
     first_line = True
     for number, raw_line in enumerate(lines, 1):
-        if number > max_lines:
+        if max_lines is not None and number > max_lines:
             raise WikimediaStreamError("line_limit", "SSE line limit exceeded")
         if ((deadline is not None and time.monotonic() >= deadline)
                 or (stop_event is not None and stop_event.is_set())):
@@ -94,7 +98,8 @@ def _response_lines(response, deadline, stop_event):
     pending = bytearray()
     after_cr = False
     for chunk in response.iter_content(chunk_size=1024):
-        if time.monotonic() >= deadline or (stop_event is not None and stop_event.is_set()):
+        if ((deadline is not None and time.monotonic() >= deadline)
+                or (stop_event is not None and stop_event.is_set())):
             return
         for value in chunk:
             if after_cr:
@@ -159,25 +164,38 @@ def _retry_delay(response, state):
 
 def iter_wikimedia_events(*, max_events=100, max_seconds=60, server_name=None,
                           user_agent=None, max_reconnects=2, stats=None,
-                          stop_event=None):
-    """Yield accepted events immediately, within explicit count/time/retry limits.
+                          stop_event=None, dedup_capacity=DEFAULT_DEDUP_CAPACITY):
+    """Yield accepted events immediately, with optional total count/time limits.
+
+    Set both limits to None to run until stop_event, generator close, an interrupt,
+    or an explicit failure. HTTP connection/read timeouts remain finite. The retry
+    budget applies to consecutive disconnects without a validated ordinary event;
+    source progress resets that budget. ``reconnects`` counts all reconnects.
 
     ``server_name`` is an optional exact client-side filter, such as
     ``he.wikipedia.org``; it does not reduce the upstream HTTP traffic. Duplicate
-    meta.id values are ignored within this run. The deduplication set contains at
-    most max_events IDs, and resets on the next invocation.
+    meta.id values are ignored within this run. With a finite max_events, at most
+    max_events IDs are retained, preserving deduplication across the bounded run.
+    With max_events=None, an LRU cache retains only dedup_capacity recent IDs
+    (default 10,000). An evicted ID can be accepted again; downstream storage
+    should use a stable event ID rather than assume global exactly-once delivery.
 
     Close the generator if a downstream consumer stops early. No synthetic
     fallback, disk cursor, full-event log, or background thread is created here.
     """
-    if not isinstance(max_events, int) or isinstance(max_events, bool) or max_events <= 0:
-        raise ValueError("max_events must be a positive integer")
-    if (isinstance(max_seconds, bool) or not isinstance(max_seconds, (int, float))
-            or not math.isfinite(max_seconds) or max_seconds <= 0):
-        raise ValueError("max_seconds must be positive and finite")
+    if max_events is not None and (not isinstance(max_events, int)
+                                  or isinstance(max_events, bool) or max_events <= 0):
+        raise ValueError("max_events must be a positive integer or None")
+    if max_seconds is not None and (isinstance(max_seconds, bool)
+                                   or not isinstance(max_seconds, (int, float))
+                                   or not math.isfinite(max_seconds) or max_seconds <= 0):
+        raise ValueError("max_seconds must be positive and finite or None")
     if (not isinstance(max_reconnects, int) or isinstance(max_reconnects, bool)
             or max_reconnects < 0):
         raise ValueError("max_reconnects must be a nonnegative integer")
+    if (not isinstance(dedup_capacity, int) or isinstance(dedup_capacity, bool)
+            or dedup_capacity <= 0):
+        raise ValueError("dedup_capacity must be a positive integer")
     if server_name is not None and (not isinstance(server_name, str) or not server_name.strip()):
         raise ValueError("server_name must be a nonempty exact hostname or None")
     agent = user_agent or os.environ.get("WIKIMEDIA_USER_AGENT") or DEFAULT_USER_AGENT
@@ -190,10 +208,12 @@ def iter_wikimedia_events(*, max_events=100, max_seconds=60, server_name=None,
     report = stats if stats is not None else {}
     report.update(frames=0, received=0, invalid=0, canary=0, filtered=0,
                   duplicates=0, ignored=0, reconnects=0, connections=0,
-                  last_event_id="", stop_reason="running", elapsed_seconds=0.0)
+                  last_event_id="", stop_reason="running", elapsed_seconds=0.0,
+                  consecutive_reconnects=0, dedup_cache_size=0, dedup_evictions=0,
+                  dedup_capacity=max_events if max_events is not None else dedup_capacity)
     started = time.monotonic()
-    deadline = started + max_seconds
-    state, seen = {}, set()
+    deadline = started + max_seconds if max_seconds is not None else None
+    state, seen = {}, OrderedDict()
     transient = (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
                  requests.exceptions.ChunkedEncodingError)
     try:
@@ -202,7 +222,7 @@ def iter_wikimedia_events(*, max_events=100, max_seconds=60, server_name=None,
                 if stop_event is not None and stop_event.is_set():
                     report["stop_reason"] = "cancelled"
                     return
-                remaining = deadline - time.monotonic()
+                remaining = deadline - time.monotonic() if deadline is not None else float("inf")
                 if remaining <= 0:
                     report["stop_reason"] = "time_limit"
                     return
@@ -229,6 +249,7 @@ def iter_wikimedia_events(*, max_events=100, max_seconds=60, server_name=None,
                             blocks = parse_sse_blocks(
                                 _response_lines(response, deadline, stop_event),
                                 deadline=deadline, state=state, stop_event=stop_event,
+                                max_lines=None,
                             )
                             for block in blocks:
                                 report["frames"] += 1
@@ -246,18 +267,24 @@ def iter_wikimedia_events(*, max_events=100, max_seconds=60, server_name=None,
                                 if event is None:
                                     report["canary"] += 1
                                     continue
+                                report["consecutive_reconnects"] = 0
                                 if server_name is not None and event["server_name"] != server_name:
                                     report["filtered"] += 1
                                     continue
                                 event_id = event["meta"]["id"]
                                 if event_id in seen:
+                                    seen.move_to_end(event_id)
                                     report["duplicates"] += 1
                                     continue
-                                seen.add(event_id)
+                                seen[event_id] = None
+                                if len(seen) > report["dedup_capacity"]:
+                                    seen.popitem(last=False)
+                                    report["dedup_evictions"] += 1
+                                report["dedup_cache_size"] = len(seen)
                                 report["received"] += 1
                                 report["elapsed_seconds"] = round(time.monotonic() - started, 3)
                                 yield event
-                                if report["received"] >= max_events:
+                                if max_events is not None and report["received"] >= max_events:
                                     report["stop_reason"] = "max_events"
                                     return
                             report["last_event_id"] = state.get("last_event_id", "")
@@ -270,17 +297,18 @@ def iter_wikimedia_events(*, max_events=100, max_seconds=60, server_name=None,
                 if stop_event is not None and stop_event.is_set():
                     report["stop_reason"] = "cancelled"
                     return
-                remaining = deadline - time.monotonic()
+                remaining = deadline - time.monotonic() if deadline is not None else float("inf")
                 if remaining <= 0:
                     report["stop_reason"] = "time_limit"
                     return
-                if report["reconnects"] >= max_reconnects:
+                if report["consecutive_reconnects"] >= max_reconnects:
                     raise WikimediaStreamError("reconnect_limit", f"retry budget exhausted after {retry_cause}")
-                if delay >= remaining:
+                if not math.isfinite(delay) or delay >= remaining:
                     raise WikimediaStreamError(
                         "retry_wait", "server retry delay exceeds the remaining lab duration; no early reconnect was attempted"
                     )
                 report["reconnects"] += 1
+                report["consecutive_reconnects"] += 1
                 if stop_event is not None:
                     stop_event.wait(delay)
                 else:
@@ -310,12 +338,15 @@ def main(argv=None):
     parser.add_argument("--seconds", type=float, default=30)
     parser.add_argument("--server-name", help="Exact client-side filter, e.g. he.wikipedia.org")
     parser.add_argument("--max-reconnects", type=int, default=2)
+    parser.add_argument("--continuous", action="store_true",
+                        help="Run without total event/time limits until Ctrl+C")
     args = parser.parse_args(argv)
     stats = {}
     code = 0
     try:
         with closing(iter_wikimedia_events(
-            max_events=args.max_events, max_seconds=args.seconds,
+            max_events=None if args.continuous else args.max_events,
+            max_seconds=None if args.continuous else args.seconds,
             server_name=args.server_name, max_reconnects=args.max_reconnects,
             stats=stats,
         )) as events:
